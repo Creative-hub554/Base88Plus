@@ -1,0 +1,12 @@
+node_modules
+.next
+out
+*.tsbuildinfo
+next-env.d.ts
+.env*
+projects-data/
+providers.json
+
+# Freebuff session logs/state — keep only the notes file.
+.freebuff/*
+!.freebuff/run.md

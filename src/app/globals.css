@@ -1,0 +1,78 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+/* Slim scrollbars for panel UX */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3f3f46 transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Entrance motion for messages, file rows and panels */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-rise {
+  animation: rise 0.25s ease-out both;
+}
+
+/* Soft shadow above the composer so it reads as floating over the chat */
+.composer-shadow {
+  box-shadow: 0 -12px 24px -14px rgba(0, 0, 0, 0.65);
+}
+
+/* Template-card hover pan: slowly scrolls the mini preview down the page.
+   The iframe is rendered at full page height inside a clipped card, and a
+   translateY moves the whole document up while hovered. Distance/duration
+   are set inline per-card (JS measures the real page height). */
+@keyframes thumb-pan {
+  from {
+    transform: translate(0, 0);
+  }
+  to {
+    /* Overridden per-card via inline CSS custom property. */
+    transform: translate(0, var(--pan, -400px));
+  }
+}
+.thumb-pan {
+  transform: translate(0, 0);
+}
+.group:hover .thumb-pan {
+  animation: thumb-pan var(--pan-duration, 6s) ease-in-out forwards;
+}
+
+/* Full hover-pan reset when the user prefers reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise {
+    animation: none;
+  }
+  .group:hover .thumb-pan {
+    animation: none;
+  }
+}

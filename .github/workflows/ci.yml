@@ -1,0 +1,54 @@
+# Anybase CI — gates on every push and PR.
+#
+# The recovery-arc E2E (tests/fix-pin-publish-e2e.test.ts) runs the REAL
+# route handlers against the REAL file store with only the AI provider
+# mocked: it spawns scripts/mock-provider.js on a localhost port and chdirs
+# into a temp dir. No real provider, no outbound network, no services —
+# so it runs on stock ubuntu runners. Port 4611 and the sibling wire-test
+# ports stay inside the runner's own namespace.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Superseded runs on the same branch are pointless — cancel them.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Check name shown on PRs: "gates". Mark it required in
+  # Settings → Branches → Branch protection → Required status checks
+  # after the first run creates it.
+  gates:
+    name: gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      # Reproducible install from package-lock.json (committed).
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      # Full suite — unit, component, and the wire/E2E tests including
+      # the fix → pin → publish recovery arc.
+      - name: Tests
+        run: npm test

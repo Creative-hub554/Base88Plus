@@ -23,13 +23,19 @@ permissions:
   contents: read
 
 jobs:
-  # Check name shown on PRs: "gates (node 22)" and "gates (node 24)" — mark
+  # Check names shown on PRs: "gates (node 22)" and "gates (node 24)" — mark
   # BOTH required in Settings → Branches → Branch protection → Required
-  # status checks after the first run creates them.
+  # status checks after the first run creates them. Do NOT mark the node 26
+  # leg required: it is the experimental canary (continue-on-error), and a
+  # continue-on-error job reports SUCCESS to the checks API even when it
+  # fails — requiring it would be a no-op.
   gates:
-    name: gates (node ${{ matrix.node }})
+    name: gates (node ${{ matrix.node }})${{ matrix.experimental == true && ' · experimental' || '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # The node 26 leg is a canary for the dev machines running Current, not
+    # an LTS gate: it may fail without blocking the merge.
+    continue-on-error: ${{ matrix.experimental == true }}
     strategy:
       # Keep going on one leg so a failure on the old LTS tells you whether
       # the change itself is broken (both fail) or it's version drift
@@ -37,6 +43,9 @@ jobs:
       fail-fast: false
       matrix:
         node: [22, 24]
+        include:
+          - node: 26
+            experimental: true
     steps:
       # Pinned to exact commit SHAs (supply-chain hardening): a compromised
       # tag re-point can't move these. Bump = new immutable SHA + comment.

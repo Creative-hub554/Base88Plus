@@ -41,10 +41,17 @@ permissions:
   contents: read
 
 jobs:
-  # Classify the schedule → blocking legs + canary.
+  # Classify the schedule → blocking legs + canary. On monthly scheduled
+  # runs it also refreshes the committed fallback snapshot
+  # (scripts/node-schedule.json) and pushes it when changed, so the outage
+  # fallback stays current without manual `npm run update:schedule` runs.
   matrix:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Only this job may write: the snapshot auto-commit. Everything else
+    # in the workflow stays read-only.
+    permissions:
+      contents: write
     outputs:
       legs: ${{ steps.compute.outputs.legs }}
       canary: ${{ steps.compute.outputs.canary }}
@@ -52,6 +59,41 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - id: compute
         run: node scripts/ci-compute-matrix.js
+
+      # Scheduled runs only — committing on push/PR runs would be wrong
+      # (and on push, self-triggering). Refresh failure must not block the
+      # gates: during an upstream outage the run proceeds on the fallback
+      # (the 60-day staleness refusal is the loud backstop), so this is
+      # continue-on-error with the script's own warning as the trace.
+      - name: Refresh the committed schedule snapshot
+        if: github.event_name == 'schedule'
+        continue-on-error: true
+        run: npm run update:schedule
+
+      # _fetchedAt bumps on every refresh, so a successful refresh always
+      # diffs — that monthly commit IS the freshness maintenance (and the
+      # repo activity that keeps GitHub from auto-disabling the schedule).
+      # [skip ci]: the scheduled run itself just validated this exact data
+      # end-to-end; and GITHUB_TOKEN pushes never trigger workflows anyway.
+      # Degradation over red: if branch protection (required ci-ok) blocks
+      # this bot push, the step failing must not fail the whole monthly
+      # run — the snapshot simply ages until the 60-day staleness refusal
+      # refuses to classify and names the problem. (The clean fix is a
+      # github-actions[bot] bypass in the ruleset, which keeps the
+      # fallback fresh instead of letting it age out.)
+      - name: Commit the refreshed snapshot
+        if: github.event_name == 'schedule'
+        continue-on-error: true
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet scripts/node-schedule.json; then
+            echo "Snapshot unchanged (refresh failed or produced identical data) — nothing to commit"
+            exit 0
+          fi
+          git add scripts/node-schedule.json
+          git commit -m "chore: refresh node release schedule snapshot [skip ci]"
+          git push
 
   # BLOCKING legs (required checks). Consume the computed set.
   #

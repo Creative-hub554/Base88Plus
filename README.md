@@ -1,5 +1,7 @@
 # Anybase
 
+[![CI](https://github.com/theow/anybase/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/theow/anybase/actions/workflows/ci.yml)
+
 **An open, Base44-style AI app builder that works with ANY AI provider.**
 
 Describe an app in chat → the AI writes the files → you see it running in a live

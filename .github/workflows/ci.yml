@@ -1,4 +1,5 @@
-# Anybase CI — gates on every push and PR.
+# Anybase CI — gates on every push/PR, plus a monthly scheduled run so
+# schedule-driven promotions/demotions are exercised even with no pushes.
 #
 # The matrix is COMPUTED from the official Node release schedule
 # (nodejs/Release schedule.json) at run time, so the canary auto-promotes
@@ -21,6 +22,15 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    # Monthly self-check (07:17 UTC on the 3rd — off the top-of-hour load
+    # spike): scheduled runs execute THIS file on the default branch with
+    # the release schedule re-classified, so a canary promotion (26 → gate
+    # on 2026-10-28) or an EOL demotion (22 out on 2027-04-30) becomes a
+    # red run + notification even with zero pushes. Failure mail for
+    # scheduled runs routes to whoever last edited this file; note GitHub
+    # disables schedules on 60-day-inactive repos (you get warned first).
+    - cron: "17 7 3 * *"
 
 # Superseded runs on the same branch are pointless — cancel them.
 concurrency:

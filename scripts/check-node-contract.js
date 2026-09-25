@@ -39,7 +39,7 @@ const fs = require("fs");
 const path = require("path");
 const semver = require("semver");
 const YAML = require("yaml");
-const { fetchSchedule, classify } = require("./node-schedule");
+const { loadSchedule, classify } = require("./node-schedule");
 
 const ROOT = process.cwd();
 const WF_REL = path.join(".github", "workflows", "ci.yml");
@@ -90,10 +90,7 @@ async function main() {
   let legs = null;
   let canary = null;
   try {
-    const scheduleText = process.env.SCHEDULE_JSON;
-    const schedule = scheduleText
-      ? JSON.parse(scheduleText)
-      : await fetchSchedule();
+    const schedule = await loadSchedule();
     const cls = classify(schedule, process.env.NOW || undefined);
     legs = cls.blocking;
     canary = cls.canary;

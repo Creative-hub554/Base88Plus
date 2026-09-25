@@ -10,10 +10,12 @@
  *                   major that is scheduled for LTS but not there yet
  *                   (non-blocking; the canary job skips itself when empty)
  *
- * Policy is implemented in scripts/node-schedule.js (classify()). This
- * wrapper only adds the CI plumbing and the safety guards: a schedule that
- * classifies to ZERO blocking legs is treated as an error — CI must fail
- * loudly instead of silently running no required checks at all.
+ * Policy is implemented in scripts/node-schedule.js (classify() +
+ * loadSchedule(): live fetch with a committed fallback snapshot that
+ * refuses to classify on stale data). This wrapper only adds the CI
+ * plumbing and the safety guards: a schedule that classifies to ZERO
+ * blocking legs is treated as an error — CI must fail loudly instead of
+ * silently running no required checks at all.
  *
  * Env overrides (tests / debugging):
  *   SCHEDULE_JSON  inline schedule (skips the network)
@@ -22,13 +24,12 @@
 "use strict";
 
 const fs = require("fs");
-const { fetchSchedule, classify } = require("./node-schedule");
+const { loadSchedule, classify } = require("./node-schedule");
 
 async function main() {
-  const scheduleText = process.env.SCHEDULE_JSON;
-  const schedule = scheduleText
-    ? JSON.parse(scheduleText)
-    : await fetchSchedule();
+  // loadSchedule: SCHEDULE_JSON override → live fetch → committed fallback
+  // (refuses too-stale snapshots; see scripts/node-schedule.js).
+  const schedule = await loadSchedule();
 
   const { today, blocking, canary } = classify(
     schedule,

@@ -1,0 +1,30 @@
+# Dependabot version updates — keep dependencies and CI actions current via
+# automatic PRs. Two ecosystems, both weekly, grouped to keep noise down.
+#
+# `github-actions` natively handles the SHA-pinned `uses:` lines in ci.yml:
+# it bumps the pinned commit SHA and rewrites the `# vX.Y.Z` version comment
+# in the same commit, so the human-readable version never drifts from the
+# immutable pin (that pin is the supply-chain hardening; Dependabot is what
+# keeps it fresh without weakening it to a mutable tag).
+version: 2
+updates:
+  # Application + CI dependencies (ai, next, react, eslint, vitest, ...).
+  # Root manifest only — the Next.js app has no workspaces.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      # Minor/patch bumps batched into one PR; anything major gets its own
+      # PR (and its own scrutiny) automatically.
+      minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
+
+  # The SHA-pinned actions in .github/workflows/ci.yml (checkout, setup-node).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

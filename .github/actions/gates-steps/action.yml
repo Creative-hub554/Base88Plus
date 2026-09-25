@@ -1,0 +1,33 @@
+name: gates-steps
+description: >
+  The shared gate sequence (install, node-contract check, typecheck, lint,
+  tests). Used by BOTH the blocking gates job and the non-blocking canary
+  job so they can never drift apart. Expects the repo to be checked out
+  and Node to be set up already.
+runs:
+  using: composite
+  steps:
+    # Reproducible install from package-lock.json (committed).
+    - name: Install dependencies
+      shell: bash
+      run: npm ci
+
+    # Drift guard: .nvmrc, package.json engines, and the matrix policy in
+    # scripts/node-schedule.js must agree.
+    - name: Node version contract
+      shell: bash
+      run: npm run check:node
+
+    - name: Typecheck
+      shell: bash
+      run: npm run typecheck
+
+    - name: Lint
+      shell: bash
+      run: npm run lint
+
+    # Full suite — unit, component, and the wire/E2E tests including
+    # the fix → pin → publish recovery arc.
+    - name: Tests
+      shell: bash
+      run: npm test

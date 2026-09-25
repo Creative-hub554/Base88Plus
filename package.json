@@ -11,7 +11,8 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "check:node": "node scripts/check-node-contract.js"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.53",
@@ -36,8 +37,10 @@
     "next": "^16.3.5",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
+    "semver": "^7.7.2",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.1"
+    "vitest": "^5.0.1",
+    "yaml": "^2.8.0"
   }
 }

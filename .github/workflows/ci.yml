@@ -1,5 +1,13 @@
 # Anybase CI — gates on every push and PR.
 #
+# The matrix is COMPUTED from the official Node release schedule
+# (nodejs/Release schedule.json) at run time, so the canary auto-promotes
+# to a required gate when it hits LTS (v26 on 2026-10-28) and EOL legs
+# drop out — no workflow edits needed, no silent drift. Policy lives in
+# scripts/node-schedule.js; the compute step is scripts/ci-compute-matrix.js
+# (it refuses to emit an empty blocking set — CI fails loudly rather than
+# silently running no required checks).
+#
 # The recovery-arc E2E (tests/fix-pin-publish-e2e.test.ts) runs the REAL
 # route handlers against the REAL file store with only the AI provider
 # mocked: it spawns scripts/mock-provider.js on a localhost port and chdirs
@@ -23,29 +31,35 @@ permissions:
   contents: read
 
 jobs:
-  # Check names shown on PRs: "gates (node 22)" and "gates (node 24)" — mark
-  # BOTH required in Settings → Branches → Branch protection → Required
-  # status checks after the first run creates them. Do NOT mark the node 26
-  # leg required: it is the experimental canary (continue-on-error), and a
-  # continue-on-error job reports SUCCESS to the checks API even when it
-  # fails — requiring it would be a no-op.
+  # Classify the schedule → blocking legs + canary.
+  matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      legs: ${{ steps.compute.outputs.legs }}
+      canary: ${{ steps.compute.outputs.canary }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - id: compute
+        run: node scripts/ci-compute-matrix.js
+
+  # BLOCKING legs (required checks). Consume the computed set.
+  #
+  # Check name shown on PRs: "gates" — ONE stable check covering every leg
+  # (see ci-ok below). Mark THAT required; individual "gates (node X) / N"
+  # checks appear as matrix children and change name on promotion, so never
+  # wire branch protection to them directly.
   gates:
-    name: gates (node ${{ matrix.node }})${{ matrix.experimental == true && ' · experimental' || '' }}
+    name: gates
+    needs: matrix
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # The node 26 leg is a canary for the dev machines running Current, not
-    # an LTS gate: it may fail without blocking the merge.
-    continue-on-error: ${{ matrix.experimental == true }}
     strategy:
-      # Keep going on one leg so a failure on the old LTS tells you whether
-      # the change itself is broken (both fail) or it's version drift
-      # (only one leg fails) — that's the whole point of the matrix.
+      # A one-leg failure reads as version drift; a two-leg failure means
+      # the change itself is broken — cancelling the survivor erases that.
       fail-fast: false
       matrix:
-        node: [22, 24]
-        include:
-          - node: 26
-            experimental: true
+        node: ${{ fromJSON(needs.matrix.outputs.legs) }}
     steps:
       # Pinned to exact commit SHAs (supply-chain hardening): a compromised
       # tag re-point can't move these. Bump = new immutable SHA + comment.
@@ -56,17 +70,54 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
 
-      # Reproducible install from package-lock.json (committed).
-      - name: Install dependencies
-        run: npm ci
+      - uses: ./.github/actions/gates-steps
 
-      - name: Typecheck
-        run: npm run typecheck
+  # THE CANARY: newest released major that is scheduled for LTS but not
+  # there yet (today: node 26 — auto-promotes into the gates matrix on its
+  # lts date, 2026-10-28). Non-blocking: continue-on-error absorbs its
+  # failures, and it SKIPS ITSELF entirely when the schedule has no such
+  # version (e.g. between LTS promotions, or all-canaries-promoted).
+  #
+  # The shared steps live in ./.github/actions/gates-steps so this job and
+  # the gates job can never drift apart — today's canary is tomorrow's
+  # gate and must pass the identical sequence.
+  canary:
+    name: canary
+    needs: matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    if: needs.matrix.outputs.canary != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ${{ fromJSON(needs.matrix.outputs.canary) }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - name: Lint
-        run: npm run lint
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
 
-      # Full suite — unit, component, and the wire/E2E tests including
-      # the fix → pin → publish recovery arc.
-      - name: Tests
-        run: npm test
+      - uses: ./.github/actions/gates-steps
+
+  # Single stable required check. Its result is green ONLY when every
+  # computed gates leg passed. Mark THIS in branch protection (Settings →
+  # Branches → Branch protection → Required status checks → "ci-ok") —
+  # one name that survives promotions/demotions, unlike per-leg names.
+  ci-ok:
+    name: ci-ok
+    needs: [matrix, gates]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Every blocking leg passed
+        run: |
+          echo "legs: ${{ needs.matrix.outputs.legs }}"
+          echo "gates result: ${{ needs.gates.result }}"
+          if [ "${{ needs.gates.result }}" != "success" ]; then
+            echo "✗ at least one blocking leg failed"
+            exit 1
+          fi
+          echo "✓ all blocking legs passed"

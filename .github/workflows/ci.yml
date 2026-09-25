@@ -56,7 +56,7 @@ jobs:
       legs: ${{ steps.compute.outputs.legs }}
       canary: ${{ steps.compute.outputs.canary }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: compute
         run: node scripts/ci-compute-matrix.js
 
@@ -115,7 +115,7 @@ jobs:
     steps:
       # Pinned to exact commit SHAs (supply-chain hardening): a compromised
       # tag re-point can't move these. Bump = new immutable SHA + comment.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
@@ -145,7 +145,7 @@ jobs:
       matrix:
         node: ${{ fromJSON(needs.matrix.outputs.canary) }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:

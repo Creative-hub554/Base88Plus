@@ -109,6 +109,12 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           api="https://api.github.com/repos/${{ github.repository }}/releases"
+          # Asset UPLOADS are served by a different host than the REST API:
+          # the documented endpoint is uploads.github.com. Posting an asset to
+          # api.github.com/.../releases/<id>/assets returns 404 — the release
+          # still gets created, but the zip silently never attaches (exactly
+          # what the v0.2.0 run hit: the release existed with zero assets).
+          uploads="https://uploads.github.com/repos/${{ github.repository }}/releases"
           notes=$(mktemp)
           cat > "$notes" <<EOF
           Automated release of ${VERSION} from CI commit ${{ github.event.workflow_run.head_sha }}.
@@ -131,7 +137,7 @@ jobs:
           if [ -z "$release_id" ]; then
             echo "release creation failed:"; echo "$resp"; exit 1
           fi
-          curl -sS -f -X POST "$api/$release_id/assets?name=anybase-${VERSION}.zip" \
+          curl -sS -f -X POST "$uploads/$release_id/assets?name=anybase-${VERSION}.zip" \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             -H "Content-Type: application/zip" \

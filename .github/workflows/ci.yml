@@ -69,6 +69,13 @@ jobs:
       - id: compute
         run: node scripts/ci-compute-matrix.js
 
+      # Early tripwire: the cron snapshot push is continue-on-error, so a
+      # failed or refused bot push would otherwise age silently until the
+      # 60-day staleness backstop kills the outage fallback. Warn past 30
+      # days, hard-fail past 60 (matches loadSchedule's refusal limit).
+      - name: Snapshot freshness check
+        run: npm run check:schedule-age
+
       # Scheduled runs only — committing on push/PR runs would be wrong
       # (and on push, self-triggering). Refresh failure must not block the
       # gates: during an upstream outage the run proceeds on the fallback

@@ -182,3 +182,5 @@ the deploy key and updating the secret together.
 - `npm run test` — Vitest suite (CI gates on it)
 - `npm run lint` — ESLint
 - `npm run check:node` — verify `.nvmrc`, `engines`, and the CI matrix agree
+- `npm run check:schedule-age` — warn when the committed schedule snapshot ages
+  past 30 days; fails past the 60-day staleness backstop

@@ -14,6 +14,7 @@
     "test": "vitest run",
     "lint": "eslint .",
     "check:node": "node scripts/check-node-contract.js",
+    "check:schedule-age": "node scripts/check-snapshot-age.js",
     "update:schedule": "node scripts/update-schedule.js"
   },
   "dependencies": {

@@ -99,9 +99,9 @@ schedule ([nodejs/Release `schedule.json`](https://github.com/nodejs/Release/blo
   LTS date (26 graduates **2026-10-28**) it promotes into the gates matrix
   automatically — no workflow edit, no PR, no drift.
 - **`ci-ok`** — a single stable check that is green only when every blocking
-  gate passed. Branch protection should require **`ci-ok` and nothing else**:
-  per-leg check names change on promotion day, and the canary is intentionally
-  allowed to fail.
+  gate passed. Branch protection **requires `ci-ok` and nothing else**
+  (enforced by the `main-protection` ruleset): per-leg check names change on
+  promotion day, and the canary is intentionally allowed to fail.
 - **Engines are a contract** — `package.json` engines (`>=22 <27`) must cover
   every blocking leg, and `.nvmrc` must pin one of them. `npm run check:node`
   enforces this locally and in CI, and fails loudly when the schedule says the
@@ -115,6 +115,48 @@ schedule ([nodejs/Release `schedule.json`](https://github.com/nodejs/Release/blo
 For contributors: open a PR and make `ci-ok` green. A persistent canary
 warning is an early signal worth fixing before that Node version becomes a
 required gate.
+
+## Security
+
+Four protections are enabled on this repo, and the
+[Security tab](https://github.com/Creative-hub554/Base88Plus/security) is
+where everything lands:
+
+- **Dependabot alerts + automated security fixes** — CVEs in dependencies
+  surface automatically, and the fix PR is opened alongside each alert
+  (minor/patch grouped weekly; majors arrive individually).
+- **Secret scanning + push protection** — known token formats are detected
+  in pushed content, and a push containing one is refused before it lands.
+- **CodeQL code scanning** — weekly static analysis of `main` (Mondays
+  09:23 UTC) plus a check on every PR reporting *new* alerts in the changed
+  code (`.github/workflows/codeql.yml`, actions pinned to commit SHAs like
+  the rest of CI).
+
+**Triage** is solo-maintainer cadence, and every decision leaves a written
+record:
+
+- *Dependency alerts*: Dependabot's fix PR is merged when green and
+  compatible. A major that conflicts with a project contract (e.g.
+  `@types/node` 26 vs `engines >=22 <27` until the 2026-10-28 promotion) or
+  needs a coordinated migration (babel 8) is **closed with the reason on the
+  PR** — Dependabot re-opens equivalents once the underlying work happens.
+- *Code scanning*: the PR check is advisory — the merge gate stays `ci-ok`
+  (see [CI](#ci)) — so triage happens in the Security tab: real findings get
+  a fix plus a test pinning the behavior, and no alert is ever dismissed
+  without a written reason.
+
+**False-positive policy (CodeQL):** a finding is dismissed only as
+`false positive` with a written justification naming the design constraint
+and cross-referencing the fix PR. Precedent: CodeQL's first scan flagged the
+demo sanitizer (`js/incomplete-multi-character-sanitization`). The splice
+holes it described were genuinely fixed (#15, #16 — one alternation replace
+iterated to a fixed point, both splice shapes test-pinned), and the residual
+"output may contain `<script`" claim was then dismissed: generated apps
+legitimately run their own emitted scripts, and the sanitizer is demo
+cosmetics, not a sandbox.
+
+Beyond the scanners: all third-party workflow actions are pinned to verified
+commit SHAs, and `main` accepts changes only through PRs gated on `ci-ok`.
 
 ## Roadmap ideas
 

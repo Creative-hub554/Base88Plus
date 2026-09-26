@@ -19,7 +19,7 @@ Release of **vX.Y.Z** from commit `<sha>` on `main`.
 - [ ] `package.json` (and lockfile) bumped to `X.Y.Z` — the release workflow
       reads the version from `package.json`; nothing else is edited by hand
 - [ ] The bump commit is the tip of `main` and this issue's `<sha>` matches it
-- [ ] Local gates green before pushing: `npm test`, `npm run typecheck`, `npm run lint`
+- [ ] Local gates green before pushing: `npm run check:node`, `npm run typecheck`, `npm run lint`, `npm test`
 
 ## 2. CI green on the release commit
 

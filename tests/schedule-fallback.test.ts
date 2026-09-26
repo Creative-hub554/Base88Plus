@@ -19,6 +19,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createServer } from "node:http";
 
 const COMPUTE = path.resolve(__dirname, "..", "scripts", "ci-compute-matrix.js");
+const CHECK = path.resolve(__dirname, "..", "scripts", "check-snapshot-age.js");
 const REPO_ROOT = path.resolve(__dirname, "..");
 
 /** Real published dates (verified 2026-09-25). */
@@ -75,14 +76,18 @@ afterEach(() => {
   served = null;
 });
 
-function runCompute(dir: string, env: Record<string, string>): Promise<{ code: number; out: string }> {
+function runScript(dir: string, script: string, env: Record<string, string>): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
-    const proc = spawn(process.execPath, [COMPUTE], { cwd: dir, env: { ...process.env, ...env } });
+    const proc = spawn(process.execPath, [script], { cwd: dir, env: { ...process.env, ...env } });
     let out = "";
     proc.stdout.on("data", (d) => (out += d));
     proc.stderr.on("data", (d) => (out += d));
     proc.on("close", (code) => resolve({ code: code ?? -1, out }));
   });
+}
+
+function runCompute(dir: string, env: Record<string, string>): Promise<{ code: number; out: string }> {
+  return runScript(dir, COMPUTE, env);
 }
 
 const DEAD = "https://127.0.0.1:9/v1/schedule.json"; // closed port = outage
@@ -166,5 +171,55 @@ describe("schedule sourcing — repo hygiene", () => {
     const cls = classify(wrapper.schedule, new Date("2026-09-25"));
     expect(cls.blocking).toEqual([22, 24]);
     expect(cls.canary).toBe(26);
+  });
+});
+
+describe("snapshot age tripwire (scripts/check-snapshot-age.js)", () => {
+  it("passes quietly while the snapshot is fresh (<= 30 days)", async () => {
+    const dir = tmpProject({});
+    const { code, out } = await runScript(dir, CHECK, { NOW: "2026-09-28" });
+    expect(code).toBe(0);
+    expect(out).toContain("\u2713");
+    expect(out).toContain("3 days old");
+    expect(out).not.toContain("\u26a0");
+  });
+
+  it("warns but passes between 31 and 60 days", async () => {
+    const dir = tmpProject({});
+    const { code, out } = await runScript(dir, CHECK, { NOW: "2026-10-28" });
+    expect(code).toBe(0);
+    expect(out).toContain("\u26a0 schedule snapshot is 33 days old");
+    expect(out).toContain("30-day warning threshold");
+    expect(out).not.toContain("\u2717");
+  });
+
+  it("passes exactly at the 60-day boundary (the loader refuses only past it)", async () => {
+    const dir = tmpProject({ snapshot: { _fetchedAt: "2026-08-29", schedule: SCHEDULE } });
+    const { code, out } = await runScript(dir, CHECK, { NOW: "2026-10-28" });
+    expect(code).toBe(0);
+    expect(out).toContain("60 days old");
+  });
+
+  it("fails past the 60-day backstop", async () => {
+    const dir = tmpProject({ snapshot: { _fetchedAt: "2026-06-01", schedule: SCHEDULE } });
+    const { code, out } = await runScript(dir, CHECK, { NOW: "2026-10-28" });
+    expect(code).toBe(1);
+    expect(out).toContain("60-day staleness backstop");
+    expect(out).toContain("update:schedule");
+  });
+
+  it("fails on a malformed snapshot (valid JSON, wrong shape)", async () => {
+    const dir = tmpProject({});
+    fs.writeFileSync(path.join(dir, "scripts", "node-schedule.json"), "{\"unexpected\": true}");
+    const { code, out } = await runScript(dir, CHECK, { NOW: "2026-09-28" });
+    expect(code).toBe(1);
+    expect(out).toContain("malformed (expected { _fetchedAt, schedule })");
+  });
+
+  it("fails when the snapshot is missing", async () => {
+    const dir = tmpProject({ snapshot: null });
+    const { code, out } = await runScript(dir, CHECK, { NOW: "2026-09-28" });
+    expect(code).toBe(1);
+    expect(out).toContain("cannot read fallback snapshot");
   });
 });

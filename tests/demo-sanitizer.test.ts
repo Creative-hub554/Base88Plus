@@ -8,9 +8,11 @@
  * three chained ONE-SHOT replaces could leave a broken tag behind when an
  * earlier deletion spliced the surrounding text into a new well-formed tag
  * (e.g. removing a dead <script> between "<im" and "g src='missing.png'>"
- * reveals a complete broken <img> AFTER the img pass already ran). The pass
- * now iterates to a fixed point — each pass only deletes, so it terminates —
- * and these tests pin both the splice case and the ordinary contracts.
+ * reveals a complete broken <img> AFTER the img pass already ran). The
+ * sanitizer is now ONE alternation replace (all three tag shapes in a single
+ * pass, so nothing "already ran") iterated to a fixed point — each pass only
+ * deletes, so it terminates — and these tests pin both the splice case and
+ * the ordinary contracts.
  */
 import { describe, expect, it } from "vitest";
 import { sanitizeDemoFiles } from "@/lib/template-generation";

@@ -201,25 +201,25 @@ export async function generateTemplateDemoOrThrow(
 /**
  * One deletion pass over the html: remove <img src=…>, <script src=…></script>,
  * and <link href=…> tags whose target is relative and not among the files the
- * model actually emitted. Replacements are always "" or the original match,
- * so a pass never grows the string.
+ * model actually emitted. ONE alternation replace handles all three tag
+ * shapes (a chained set of one-shot replaces would let an earlier deletion
+ * splice the text into a NEW well-formed tag the later passes never see),
+ * and replacements are always "" or the original match, so a pass never
+ * grows the string.
  */
+const BROKEN_TAG_RE =
+  /[ \t]*(?:<img\b[^>]*\bsrc=["']([^"'#]+)["'][^>]*>|<script\b[^>]*\bsrc=["']([^"'#]+)["'][^>]*>\s*<\/script>|<link\b[^>]*\bhref=["']([^"'#]+)["'][^>]*>)[ \t]*\n?/gi;
+
 function stripBrokenPass(html: string, emitted: Set<string>): string {
   const keep = (target: string): boolean =>
     /^(https?:|data:|#|\/)/.test(target) || emitted.has(target);
-  return html
-    .replace(
-      /[ \t]*<img\b[^>]*\bsrc=["']([^"'#]+)["'][^>]*>[ \t]*\n?/gi,
-      (tag, src: string) => (keep(src) ? tag : ""),
-    )
-    .replace(
-      /[ \t]*<script\b[^>]*\bsrc=["']([^"'#]+)["'][^>]*>\s*<\/script>[ \t]*\n?/gi,
-      (tag, src: string) => (keep(src) ? tag : ""),
-    )
-    .replace(
-      /[ \t]*<link\b[^>]*\bhref=["']([^"'#]+)["'][^>]*>[ \t]*\n?/gi,
-      (tag, href: string) => (keep(href) ? tag : ""),
-    );
+  return html.replace(
+    BROKEN_TAG_RE,
+    (tag, imgSrc: string, scriptSrc: string, linkHref: string) => {
+      const target = imgSrc ?? scriptSrc ?? linkHref;
+      return keep(target) ? tag : "";
+    },
+  );
 }
 
 /**

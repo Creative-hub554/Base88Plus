@@ -113,6 +113,7 @@ jobs:
       # (continue-on-error): the snapshot ages until the 60-day staleness
       # refusal names the problem.
       - name: Commit the refreshed snapshot
+        id: commit
         if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.force_snapshot_refresh == true)
         continue-on-error: true
         run: |
@@ -120,6 +121,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if git diff --quiet scripts/node-schedule.json; then
             echo "Snapshot unchanged (refresh failed or produced identical data) — nothing to commit"
+            echo "push=skipped" >> "$GITHUB_OUTPUT"
+            echo "skipped: snapshot unchanged, no push attempted" | tee -a "$GITHUB_STEP_SUMMARY" "$GITHUB_WORKSPACE/snapshot-push-status.txt"
             exit 0
           fi
           git add scripts/node-schedule.json
@@ -134,7 +137,32 @@ jobs:
           # step earlier in this job wrote the native IdentityFile mapping
           # and the push below rewrites to it via url.insteadOf.
           ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
-          git push git@github.com:Creative-hub554/Base88Plus.git HEAD:main
+          { git push git@github.com:Creative-hub554/Base88Plus.git HEAD:main && echo "ok: snapshot pushed to main" || echo "failed: push did not land - see the ssh/git error above"; } | tee -a "$GITHUB_STEP_SUMMARY" "$GITHUB_WORKSPACE/snapshot-push-status.txt"
+          # A dead push still exits non-zero here (the failure annotation
+          # must survive for the post-Oct-3 verifier); the artifact below
+          # adds an API-level marker on top. Verdict is read back from the
+          # status file because the pipe above runs in a subshell.
+          if grep -q "^ok:" "$GITHUB_WORKSPACE/snapshot-push-status.txt"; then
+            echo "push=ok" >> "$GITHUB_OUTPUT"
+          else
+            echo "push=failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      # API-visible push-failure tripwire: the commit step records its
+      # outcome and the artifact NAME encodes it (snapshot-push-ok /
+      # -failed / -skipped), so a dead push is detectable from
+      # GET /actions/runs/{id}/artifacts alone - no log or annotation
+      # download needed. Skipped when the commit step did not run
+      # (default dispatches, PRs, pushes). if-no-files-found: error keeps
+      # "step died before recording" loud instead of silently absent.
+      - name: Export the snapshot push status as a run artifact
+        if: always() && steps.commit.outcome != 'skipped'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: snapshot-push-${{ steps.commit.outputs.push || 'unknown' }}
+          path: snapshot-push-status.txt
+          if-no-files-found: error
 
   # BLOCKING legs (required checks). Consume the computed set.
   #

@@ -199,42 +199,52 @@ export async function generateTemplateDemoOrThrow(
 }
 
 /**
+ * One deletion pass over the html: remove <img src=…>, <script src=…></script>,
+ * and <link href=…> tags whose target is relative and not among the files the
+ * model actually emitted. Replacements are always "" or the original match,
+ * so a pass never grows the string.
+ */
+function stripBrokenPass(html: string, emitted: Set<string>): string {
+  const keep = (target: string): boolean =>
+    /^(https?:|data:|#|\/)/.test(target) || emitted.has(target);
+  return html
+    .replace(
+      /[ \t]*<img\b[^>]*\bsrc=["']([^"'#]+)["'][^>]*>[ \t]*\n?/gi,
+      (tag, src: string) => (keep(src) ? tag : ""),
+    )
+    .replace(
+      /[ \t]*<script\b[^>]*\bsrc=["']([^"'#]+)["'][^>]*>\s*<\/script>[ \t]*\n?/gi,
+      (tag, src: string) => (keep(src) ? tag : ""),
+    )
+    .replace(
+      /[ \t]*<link\b[^>]*\bhref=["']([^"'#]+)["'][^>]*>[ \t]*\n?/gi,
+      (tag, href: string) => (keep(href) ? tag : ""),
+    );
+}
+
+/**
  * Remove tags that reference files the model never emitted — broken <img>,
  * dead <script src>/<link href>. Small models do this constantly; the demo
  * must look complete with only its own files. Deterministic, so it works
  * regardless of model quality. Returns the cleaned file set.
+ *
+ * The pass is iterated TO A FIXED POINT: a removal can splice the surrounding
+ * text into a NEW well-formed tag (e.g. `<im` + `<link …>` + `g src=…>`), and
+ * a single chained pass would leave that new broken tag behind. Each pass
+ * only deletes, so the loop strictly shrinks the string and terminates.
  */
-function sanitizeDemoFiles(files: ProjectFile[]): ProjectFile[] {
+export function sanitizeDemoFiles(files: ProjectFile[]): ProjectFile[] {
   const emitted = new Set(files.map((f) => f.path));
-  const stripBroken = (html: string): string => {
-    // <img src="x"> / <script src="x">…</script> / <link href="x"> with a
-    // relative target that isn't in the file set.
-    return html
-      .replace(
-        /[ \t]*<img\b[^>]*\bsrc=["']([^"'#]+)["'][^>]*>[ \t]*\n?/gi,
-        (tag, src: string) =>
-          /^(https?:|data:|#|\/)/.test(src) || emitted.has(src)
-            ? tag
-            : "",
-      )
-      .replace(
-        /[ \t]*<script\b[^>]*\bsrc=["']([^"'#]+)["'][^>]*>\s*<\/script>[ \t]*\n?/gi,
-        (tag, src: string) =>
-          /^(https?:|data:|#|\/)/.test(src) || emitted.has(src)
-            ? tag
-            : "",
-      )
-      .replace(
-        /[ \t]*<link\b[^>]*\bhref=["']([^"'#]+)["'][^>]*>[ \t]*\n?/gi,
-        (tag, href: string) =>
-          /^(https?:|data:|#|\/)/.test(href) || emitted.has(href)
-            ? tag
-            : "",
-      );
-  };
-  return files.map((f) =>
-    f.path.endsWith(".html") ? { ...f, content: stripBroken(f.content) } : f,
-  );
+  return files.map((f) => {
+    if (!f.path.endsWith(".html")) return f;
+    let prev = f.content;
+    let next = stripBrokenPass(prev, emitted);
+    while (next !== prev) {
+      prev = next;
+      next = stripBrokenPass(prev, emitted);
+    }
+    return { ...f, content: next };
+  });
 }
 
 /**

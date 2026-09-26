@@ -62,6 +62,31 @@ Practical consequences:
   breaks the contract that `.nvmrc`, `engines`, and the CI matrix agree —
   fix it locally rather than waiting for CI to tell you.
 
+## If CodeQL flags your PR
+
+Besides the CI gates, every PR gets a **CodeQL** check that reports *new*
+security findings in the code your diff touches. It is **advisory** —
+`ci-ok` remains the only merge gate — but treat a red CodeQL check as a
+design review, not noise:
+
+1. **Read the annotation** on the check (it names the rule and the exact
+   `file:line`) and the corresponding entry in the
+   [Security tab](https://github.com/Creative-hub554/Base88Plus/security/code-scanning).
+2. **Most findings are real.** Fix them in the PR, and pin the behavior with
+   a test — that's the house pattern (see the demo-sanitizer fixpoint
+   restructuring, where the fix came with splice-shape tests).
+3. **If it's a genuine false positive**, say so in the PR with the design
+   constraint spelled out — don't just reword the code to dodge the scanner.
+   A maintainer dismisses the alert with a written justification; precedent:
+   the "output may contain `<script`" finding on the demo sanitizer, where
+   generated apps legitimately run their own emitted scripts.
+
+Repo-level alerts (dependency CVEs, secret scanning) are triaged by the
+maintainers per the [README Security section](README.md#security). And if
+you find a security issue in the app itself, **don't open a public issue** —
+use **Report a vulnerability** (Security tab → Private vulnerability
+reporting).
+
 ## The release process (it's automatic)
 
 Releases require **no human tagging**:

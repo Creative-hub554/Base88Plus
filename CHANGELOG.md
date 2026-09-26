@@ -10,6 +10,43 @@ and CI goes green — see [CONTRIBUTING.md](CONTRIBUTING.md) for the release
 process. Download zips: the
 [Releases page](https://github.com/Creative-hub554/Base88Plus/releases/latest).
 
+## [0.2.1] — 2026-09-26
+
+Maintenance release: the first cut with the `main-protection` branch ruleset
+guarding `main` — every change below landed as a PR gated on green `ci-ok`.
+
+### Changed
+
+- **Dependency refresh** via Dependabot (all merged with head checks green):
+  `next` ^16.3.6, `@ai-sdk/react` ^4.0.114, `jsdom` ^30.1.1 plus lockfile
+  refreshes (#8, grouped minor/patch); CI tooling updated in place —
+  `actions/setup-node` re-pinned to the v7.0.0 SHA (#1) and
+  `actions/checkout` to the v7.0.1 SHA (#2), keeping the supply-chain pin
+  policy intact
+- **Dependabot queue triaged to zero** — the expected-red babel 8 major bumps
+  (#4, #5) and the `@types/node` 26 bump (#6, conflicts with
+  `engines: ">=22 <27"` until the Node 26 canary promotes on 2026-10-28)
+  were closed with explanations; Dependabot re-opens equivalents when the
+  underlying migrations happen
+
+### Fixed
+
+- **UTC-midnight-proof fallback-age assertion** — the schedule-fallback test
+  pinned the committed snapshot's age as a literal `0d ago`, which is only
+  true on the UTC day the snapshot was committed; CI went red the morning of
+  2026-09-26 while same-tree local runs hours earlier had passed. The
+  assertion now checks the message shape (`fetched <date>, <n>d ago`) instead
+  of the literal (#10). Caught by the new branch ruleset on its first day: a
+  red `ci-ok` refused the merge exactly as designed
+
+### Added
+
+- **`main-protection` ruleset** (repository setting, not code) — `main` now
+  requires the `ci-ok` status check, blocks branch deletion and history
+  rewrites, and lets changes land only through PRs (0 approvals, solo
+  friendly). Verified both ways: a direct push is refused (GH013) and a
+  red-PR merge is refused (405) (#10)
+
 ## [0.2.0] — 2026-09-25
 
 First published release, and the first produced by the automated
@@ -78,5 +115,6 @@ was superseded by the 0.2.0 bump before anything was ever published. No
 artifacts exist for this version; it is recorded here so the semver story
 stays honest.
 
+[0.2.1]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.1
 [0.2.0]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Creative-hub554/Base88Plus/commits/465569e

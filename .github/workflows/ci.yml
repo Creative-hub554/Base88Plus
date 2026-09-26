@@ -124,16 +124,17 @@ jobs:
           fi
           git add scripts/node-schedule.json
           git commit -m "chore: refresh node release schedule snapshot [skip ci]"
-          # ssh.github.com:443 works from runners where outbound port 22 is
-          # blocked; the deploy key authorizes the push (the main-protection
-          # ruleset exempts the Deploy keys role). PIN THE HOST KEY FIRST:
-          # runner ssh is non-interactive with no known_hosts entry, and a
-          # failed host-key check exits 128 BEFORE any authentication is
-          # attempted (rehearsed 2026-09-26, run 36251046188: the push died
-          # at host verification, the key was never offered - its
-          # last_used stayed null - and continue-on-error kept the job green).
-          ssh-keyscan -p 443 ssh.github.com >> ~/.ssh/known_hosts 2>/dev/null
-          git push ssh://git@ssh.github.com:443/Creative-hub554/Base88Plus.git HEAD:main
+          # Pin the GitHub SSH host key before the push: runner ssh is non-
+          # interactive with no known_hosts entry, and a failed host-key
+          # check exits 128 BEFORE any authentication is attempted
+          # (rehearsed 2026-09-26, run 36251046188: the push died at host
+          # verification, the key was never offered, and continue-on-error
+          # kept the job green). Keyscan is a BACKSTOP only - the v2 deploy
+          # key's comment is a github.com owner/repo URL, so the ssh-agent
+          # step earlier in this job wrote the native IdentityFile mapping
+          # and the push below rewrites to it via url.insteadOf.
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          git push git@github.com:Creative-hub554/Base88Plus.git HEAD:main
 
   # BLOCKING legs (required checks). Consume the computed set.
   #

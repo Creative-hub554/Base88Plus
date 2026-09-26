@@ -10,6 +10,29 @@ and CI goes green — see [CONTRIBUTING.md](CONTRIBUTING.md) for the release
 process. Download zips: the
 [Releases page](https://github.com/Creative-hub554/Base88Plus/releases/latest).
 
+## [0.2.3] — 2026-09-26
+
+Onboarding-release: everything here came out of a fresh-clone newcomer
+audit that followed the README and CONTRIBUTING literally.
+
+### Fixed
+
+- **`.env.example` is actually in the repo now** — both README and
+  CONTRIBUTING told newcomers to copy it, but the file had never been
+  committed (the `.env*` ignore rule swallowed it and the real copy only
+  existed in an old workspace). It is tracked via an ignore-rule negation
+  (`!.env.example`); real `.env*` files stay ignored (#24)
+- **`.gitattributes` added** — CONTRIBUTING asked Windows contributors to
+  keep things "`.gitattributes`-friendly" while the file itself was missing.
+  LF policy for text files plus binary exemptions, via `text=auto`;
+  deliberately no renormalization commit, so existing history is untouched
+  (#24)
+- **Local gate list matches CI** — CONTRIBUTING claimed its command list was
+  "exactly what CI runs" but ordered it differently; it now mirrors the CI
+  composite action (`check:node` → `typecheck` → `lint` → `test`) (#24)
+- **Release-checklist template includes `check:node`** — the gate CI itself
+  runs was missing from the template used to verify releases (#24)
+
 ## [0.2.2] — 2026-09-26
 
 Maintenance release — the first cut where every change landed through PRs
@@ -150,6 +173,7 @@ was superseded by the 0.2.0 bump before anything was ever published. No
 artifacts exist for this version; it is recorded here so the semver story
 stays honest.
 
+[0.2.3]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.3
 [0.2.2]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.2
 [0.2.1]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.1
 [0.2.0]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.0

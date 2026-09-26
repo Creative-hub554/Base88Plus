@@ -102,7 +102,9 @@ describe("schedule sourcing — happy paths", () => {
     const { code, out } = await runCompute(dir, { SCHEDULE_URL: DEAD });
     expect(code).toBe(0);
     expect(out).toContain("⚠ upstream unavailable");
-    expect(out).toContain("using committed fallback snapshot (fetched 2026-09-25, 0d ago)");
+    // Snapshot age is day-of-run dependent (UTC midnight boundary): pin the
+    // shape, not the literal day count.
+    expect(out).toMatch(/using committed fallback snapshot \(fetched 2026-09-25, \d+d ago\)/);
     expect(out).toContain("blocking legs [22,24], canary [26]");
   }, 15_000);
 });

@@ -158,6 +158,14 @@ cosmetics, not a sandbox.
 Beyond the scanners: all third-party workflow actions are pinned to verified
 commit SHAs, and `main` accepts changes only through PRs gated on `ci-ok`.
 
+The monthly schedule-refresh commit is pushed over SSH by a dedicated
+read/write deploy key (`docs/keys/cron-refresh.pub`), which the
+`main-protection` ruleset exempts through its Deploy keys bypass actor. The
+private key exists only as the `DEPLOY_KEY_PEM` Actions secret and is loaded
+at push time (`webfactory/ssh-agent`); `github-actions[bot]` itself cannot be
+a bypass actor on personal repos. Rotate or retire the bot push by rotating
+the deploy key and updating the secret together.
+
 ## Roadmap ideas
 
 - Project templates & import/export

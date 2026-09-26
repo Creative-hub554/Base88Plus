@@ -57,6 +57,15 @@ jobs:
       canary: ${{ steps.compute.outputs.canary }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The ruleset's bypass actor is the repo's Deploy keys ROLE, so the
+      # scheduled snapshot push authenticates as a deploy key and skips the
+      # pull_request gate. Scheduled runs only: push/PR runs keep zero
+      # credentials beyond the read-only GITHUB_TOKEN.
+      - uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
+        if: github.event_name == 'schedule'
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_KEY_PEM }}
       - id: compute
         run: node scripts/ci-compute-matrix.js
 
@@ -74,13 +83,15 @@ jobs:
       # diffs — that monthly commit IS the freshness maintenance (and the
       # repo activity that keeps GitHub from auto-disabling the schedule).
       # [skip ci]: the scheduled run itself just validated this exact data
-      # end-to-end; and GITHUB_TOKEN pushes never trigger workflows anyway.
-      # Degradation over red: if branch protection (required ci-ok) blocks
-      # this bot push, the step failing must not fail the whole monthly
-      # run — the snapshot simply ages until the 60-day staleness refusal
-      # refuses to classify and names the problem. (The clean fix is a
-      # github-actions[bot] bypass in the ruleset, which keeps the
-      # fallback fresh instead of letting it age out.)
+      # end-to-end; and bot pushes never trigger workflows anyway.
+      # The push goes over SSH as the cron-refresh deploy key (loaded by
+      # webfactory/ssh-agent above), which the main-protection ruleset
+      # exempts via its Deploy keys bypass actor (bypass_mode: always) --
+      # github-actions[bot] itself CANNOT be a bypass actor on personal
+      # repos (API 422s and the UI never offers it), so the deploy key is
+      # the authorization. Failure still degrades gracefully
+      # (continue-on-error): the snapshot ages until the 60-day staleness
+      # refusal names the problem.
       - name: Commit the refreshed snapshot
         if: github.event_name == 'schedule'
         continue-on-error: true
@@ -93,7 +104,9 @@ jobs:
           fi
           git add scripts/node-schedule.json
           git commit -m "chore: refresh node release schedule snapshot [skip ci]"
-          git push
+          # ssh.github.com:443 works from runners where outbound port 22 is
+          # blocked; the deploy key loaded above authorizes the push.
+          git push ssh://git@ssh.github.com:443/Creative-hub554/Base88Plus.git HEAD:main
 
   # BLOCKING legs (required checks). Consume the computed set.
   #

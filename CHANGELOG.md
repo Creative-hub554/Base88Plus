@@ -10,6 +10,41 @@ and CI goes green — see [CONTRIBUTING.md](CONTRIBUTING.md) for the release
 process. Download zips: the
 [Releases page](https://github.com/Creative-hub554/Base88Plus/releases/latest).
 
+## [0.2.2] — 2026-09-26
+
+Maintenance release — the first cut where every change landed through PRs
+gated by the `main-protection` ruleset and was scanned by CodeQL from the
+first commit. No application behavior changes beyond the sanitizer
+hardening.
+
+### Added
+
+- **CodeQL code scanning** — advanced setup in our own workflow file
+  (`.github/workflows/codeql.yml`): `github/codeql-action` pinned to the
+  v4.38.2 commit SHA, weekly javascript-typescript analysis of `main`, and a
+  new-alerts check on every PR. The Security tab now shows **Code scanning**
+  alongside the Dependabot alerts (#14)
+- **Node 26 promotion day pre-verified** — the 2026-10-28 zero-touch
+  promotion was confirmed by simulating the date (matrix `[22, 24, 26]`, the
+  version-contract guard holds, `ci-ok` keeps its identity), and the failure
+  edges were probed: the post-EOL engines-floor alarm (2027-05-01), the
+  snapshot-staleness backstop (~2026-11-24, refusal reasons stack), and an
+  upstream outage on promotion day itself. Tracked in the promotion-day
+  checklist issue and the babel 8 migration issue (#17, #20)
+
+### Fixed
+
+- **Demo-sanitizer splice holes** — CodeQL's first scan flagged
+  `js/incomplete-multi-character-sanitization` in `sanitizeDemoFiles`: the
+  chained one-shot replaces could leave a broken tag behind when an earlier
+  deletion spliced the surrounding text into a new well-formed tag. The
+  sanitizer is now ONE alternation replace over all three tag shapes
+  (img/script/link), iterated to a fixed point, with both splice shapes
+  pinned by tests (#15, #16). The residual "`<script` may remain" finding
+  was dismissed as a false positive by design: generated apps legitimately
+  run their own emitted scripts, and the real splice holes are closed and
+  test-pinned
+
 ## [0.2.1] — 2026-09-26
 
 Maintenance release: the first cut with the `main-protection` branch ruleset
@@ -115,6 +150,7 @@ was superseded by the 0.2.0 bump before anything was ever published. No
 artifacts exist for this version; it is recorded here so the semver story
 stays honest.
 
+[0.2.2]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.2
 [0.2.1]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.1
 [0.2.0]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Creative-hub554/Base88Plus/commits/465569e

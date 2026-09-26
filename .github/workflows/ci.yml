@@ -31,6 +31,18 @@ on:
     # scheduled runs routes to whoever last edited this file; note GitHub
     # disables schedules on 60-day-inactive repos (you get warned first).
     - cron: "17 7 3 * *"
+  # Manual runs. Default (no inputs) = verification only: gates, canary,
+  # ci-ok, and the snapshot-age tripwire, with zero credentials beyond the
+  # read-only GITHUB_TOKEN. force_snapshot_refresh=true additionally runs
+  # the cron-only refresh + deploy-key push (a test-fire of the Oct 3
+  # path); it is PINNED to the default branch so a dispatch fired from any
+  # other ref can never push non-main content around the PR gate.
+  workflow_dispatch:
+    inputs:
+      force_snapshot_refresh:
+        description: "Also run the cron-only snapshot refresh + deploy-key push"
+        type: boolean
+        default: false
 
 # Superseded runs on the same branch are pointless — cancel them.
 concurrency:
@@ -60,10 +72,11 @@ jobs:
 
       # The ruleset's bypass actor is the repo's Deploy keys ROLE, so the
       # scheduled snapshot push authenticates as a deploy key and skips the
-      # pull_request gate. Scheduled runs only: push/PR runs keep zero
-      # credentials beyond the read-only GITHUB_TOKEN.
+      # Schedule runs, or a default-branch dispatch with the test-fire
+      # input: the deploy-key push must never run from any other ref.
+      # Push/PR runs keep zero credentials beyond the read-only GITHUB_TOKEN.
       - uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
-        if: github.event_name == 'schedule'
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.force_snapshot_refresh == true)
         with:
           ssh-private-key: ${{ secrets.DEPLOY_KEY_PEM }}
       - id: compute
@@ -82,7 +95,7 @@ jobs:
       # (the 60-day staleness refusal is the loud backstop), so this is
       # continue-on-error with the script's own warning as the trace.
       - name: Refresh the committed schedule snapshot
-        if: github.event_name == 'schedule'
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.force_snapshot_refresh == true)
         continue-on-error: true
         run: npm run update:schedule
 
@@ -100,7 +113,7 @@ jobs:
       # (continue-on-error): the snapshot ages until the 60-day staleness
       # refusal names the problem.
       - name: Commit the refreshed snapshot
-        if: github.event_name == 'schedule'
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.force_snapshot_refresh == true)
         continue-on-error: true
         run: |
           git config user.name "github-actions[bot]"

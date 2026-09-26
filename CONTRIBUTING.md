@@ -27,9 +27,10 @@ Add a provider key in **Settings → AI Providers** (stored locally in
    ```
 2. Commit in small, focused units. Messages: imperative mood, first line
    under ~72 chars, blank line, then *why* (the diff shows the what).
-3. Before pushing, run the gates locally — they are exactly what CI runs:
+3. Before pushing, run the gates locally — the same set CI runs, in CI's
+   order (cheapest first):
    ```bash
-   npm test && npm run typecheck && npm run lint && npm run check:node
+   npm run check:node && npm run typecheck && npm run lint && npm test
    ```
 4. Push and open a PR against `main`. Fill in the description: what changed,
    why, and anything you deliberately did *not* do.

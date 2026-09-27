@@ -125,15 +125,15 @@ jobs:
             echo
             echo "<details><summary>verify-oct3.ps1 output</summary>"
             echo
-            '```'
+            echo '```'
             cat smoke-oct3.log
-            '```'
+            echo '```'
             echo "</details>"
             echo "<details><summary>verify-oct28.ps1 output</summary>"
             echo
-            '```'
+            echo '```'
             cat smoke-oct28.log
-            '```'
+            echo '```'
             echo "</details>"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$o3" = OK ] && [ "$o28" = OK ]; then echo "DRILL_PASS"; else echo "DRILL_FAIL"; exit 1; fi

@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "next dev",
+    "preview": "node scripts/preview.js",
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",

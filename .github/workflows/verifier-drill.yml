@@ -1,0 +1,155 @@
+# Weekly verifier drill — exercises the Oct 3 / Oct 28 runbook verifiers
+# (scripts/verify-oct3.ps1, scripts/verify-oct28.ps1) against FRESH CI data
+# every week, so they are debugged long before their real dates. The drill
+# fires a plain verification CI run on main (no force_snapshot_refresh: the
+# dispatch path is credential-free by design), waits for it to finish, then
+# smoke-runs BOTH verifiers against that run with VERIFY_FORCE=1 DRY_RUN=1
+# SMOKE_RUN_ID — plumbing only: no date gates, no #18 comments, no closes.
+#
+# Any drill failure means a verifier is drifting (or CI itself is red) at
+# least a week before it could bite; a reminder comment lands on issue #18.
+name: Verifier drill
+
+on:
+  schedule:
+    # Mondays 08:23 UTC — off the top-of-hour load spike (same idiom as the
+    # monthly CI cron). Scheduled runs execute THIS file on the default
+    # branch, so keep the verifiers in scripts/ green on main.
+    - cron: '23 8 * * 1'
+  workflow_dispatch: {}
+
+# One drill at a time; never cancel a running drill mid-verification.
+concurrency:
+  group: verifier-drill-${{ github.ref }}
+  cancel-in-progress: false
+
+# Read-only except the failure reminder, which comments on issue #18.
+# (Step permissions can only narrow job permissions, so issues: write must
+# live here — it is consumed by exactly one step.)
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out the drill (the verifiers live in scripts/)
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Fire a fresh verification CI run on the default branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          code=$(curl -s -o /tmp/fire.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/dispatches" \
+            -d '{"ref":"main"}')
+          echo "ci dispatch http=$code"
+          case "$code" in
+            204|201) ;;
+            *) cat /tmp/fire.json; exit 1 ;;
+          esac
+
+      - name: Wait for the CI run to appear (scoped to CI + this commit)
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha='${{ github.sha }}'
+          run_id=""
+          for i in $(seq 1 40); do
+            sleep 5
+            run_id=$(curl -s -H "Authorization: Bearer ${GH_TOKEN}" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?event=workflow_dispatch&per_page=10" \
+              | jq -r --arg sha "$sha" '[.workflow_runs[] | select(.head_branch == "main" and .head_sha == $sha)][0].id // ""')
+            if [ -n "$run_id" ] && [ "$run_id" != "null" ]; then break; fi
+            run_id=""
+          done
+          if [ -z "$run_id" ]; then
+            echo "CI dispatch run never appeared for $sha"; exit 1
+          fi
+          echo "ci_run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "Found CI run $run_id for $sha"
+
+      - name: Wait for the CI run to finish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rid='${{ steps.find.outputs.ci_run_id }}'
+          for i in $(seq 1 90); do
+            sleep 10
+            st=$(curl -s -H "Authorization: Bearer ${GH_TOKEN}" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/$rid" | jq -r '.status')
+            echo "poll $i: status=$st"
+            if [ "$st" = "completed" ]; then exit 0; fi
+          done
+          echo "CI run $rid still not completed after ~15 minutes"; exit 1
+
+      - name: Smoke-run verify-oct3.ps1 against the fresh CI run
+        id: oct3
+        continue-on-error: true
+        env:
+          VERIFY_FORCE: '1'
+          DRY_RUN: '1'
+          VERIFY_TOKEN: ${{ secrets.VERIFY_PAT }}
+          SMOKE_RUN_ID: ${{ steps.find.outputs.ci_run_id }}
+        run: pwsh -NoProfile -File scripts/verify-oct3.ps1
+
+      - name: Smoke-run verify-oct28.ps1 against the fresh CI run
+        id: oct28
+        continue-on-error: true
+        env:
+          VERIFY_FORCE: '1'
+          DRY_RUN: '1'
+          VERIFY_TOKEN: ${{ secrets.VERIFY_PAT }}
+          SMOKE_RUN_ID: ${{ steps.find.outputs.ci_run_id }}
+        run: pwsh -NoProfile -File scripts/verify-oct28.ps1
+
+      - name: Drill summary (fails the job if any verifier smoke failed)
+        env:
+          OCT3: ${{ steps.oct3.outcome }}
+          OCT28: ${{ steps.oct28.outcome }}
+          RUN_ID: ${{ steps.find.outputs.ci_run_id }}
+        run: |
+          set -euo pipefail
+          verdict=PASS
+          if [ "$OCT3" != "success" ] || [ "$OCT28" != "success" ]; then verdict=FAIL; fi
+          {
+            echo "## Weekly verifier drill - $verdict"
+            echo
+            echo "- CI run inspected: [$RUN_ID](https://github.com/${GITHUB_REPOSITORY}/actions/runs/$RUN_ID)"
+            echo "- verify-oct3.ps1 smoke: $OCT3"
+            echo "- verify-oct28.ps1 smoke: $OCT28"
+            echo
+            echo "Both verifiers ran with VERIFY_FORCE=1 DRY_RUN=1 SMOKE_RUN_ID=$RUN_ID"
+            echo "(no date gates, no #18 comments, no closes - plumbing only)."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "DRILL_$verdict"
+          if [ "$verdict" != "PASS" ]; then exit 1; fi
+
+      - name: Reminder nudge on #18 when the drill fails
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OCT3: ${{ steps.oct3.outcome }}
+          OCT28: ${{ steps.oct28.outcome }}
+          RUN_ID: ${{ steps.find.outputs.ci_run_id }}
+        run: |
+          set -euo pipefail
+          body="Weekly verifier drill FAILED (${{ github.event_name }}, commit ${{ github.sha }}): oct3=${OCT3:-<never ran>}, oct28=${OCT28:-<never ran>}, CI run inspected ${RUN_ID:-none}. A verifier is drifting or CI itself is red - investigate before the real dates (Oct 3 / Oct 28). Drill run: ${{ github.server_url }}/${GITHUB_REPOSITORY}/actions/runs/${{ github.run_id }}"
+          code=$(curl -s -o /tmp/c.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/18/comments" \
+            -d "$(jq -n --arg b "$body" '{body:$b}')")
+          echo "issue comment http=$code"
+          case "$code" in
+            200|201) ;;
+            *) cat /tmp/c.json; exit 1 ;;
+          esac

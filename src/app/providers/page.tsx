@@ -51,6 +51,33 @@ function statusLabel(p: ProviderHealth): {
     : { state: "down", text: "unreachable" };
 }
 
+/** Exact start commands for local providers, shown when one is
+ * configured but unreachable — the two states mean "server is simply
+ * not running", not a settings problem. Keyed by provider id. */
+interface SetupStep {
+  note: string;
+  cmd?: string;
+}
+
+const LOCAL_SETUP: Record<string, SetupStep[]> = {
+  ollama: [
+    { note: "Start the Ollama app (Windows/macOS tray) or run:", cmd: "ollama serve" },
+    { note: "Make sure the default model exists:", cmd: "ollama pull qwen2.5-coder:7b" },
+    { note: "It should answer on:", cmd: "curl http://localhost:11434/v1/models" },
+  ],
+  lmstudio: [
+    { note: "In the LM Studio app: Developer tab → switch the local server on (port 1234). Or from a terminal:", cmd: "lms server start" },
+    { note: "Download the default model if it is missing:", cmd: "lms get qwen2.5-coder-7b-instruct" },
+    { note: "It should answer on:", cmd: "curl http://localhost:1234/v1/models" },
+  ],
+  vllm: [
+    { note: "One-time install (needs an NVIDIA GPU):", cmd: "pip install vllm" },
+    { note: "Serve the default model on the expected port:", cmd: "vllm serve meta-llama/Llama-3.1-8B-Instruct --port 8000" },
+    { note: "llama.cpp, TGI or text-generation-webui work too — anything OpenAI-compatible that listens on :8000." },
+    { note: "It should answer on:", cmd: "curl http://localhost:8000/v1/models" },
+  ],
+};
+
 export default function ProvidersPage() {
   const [data, setData] = useState<HealthData | null>(null);
   const [probing, setProbing] = useState(false);
@@ -177,6 +204,25 @@ export default function ProvidersPage() {
                     <div className="mt-1 truncate font-mono text-[11px] text-neutral-600">
                       {p.baseURL}
                     </div>
+                    {p.configured && p.reachable === false && LOCAL_SETUP[p.id] && (
+                      <div className="mt-3 rounded-lg border border-dashed border-neutral-800 bg-neutral-950 p-3">
+                        <div className="text-[10px] font-medium uppercase tracking-wide text-neutral-500">
+                          Start it
+                        </div>
+                        <ul className="mt-1.5 space-y-1">
+                          {LOCAL_SETUP[p.id].map((s, i) => (
+                            <li key={i} className="text-xs text-neutral-400">
+                              {s.note}
+                              {s.cmd && (
+                                <code className="ml-1 rounded bg-neutral-900 px-1.5 py-0.5 font-mono text-[11px] text-neutral-200">
+                                  {s.cmd}
+                                </code>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                   </div>
                 );
               })}

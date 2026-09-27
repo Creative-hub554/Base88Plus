@@ -503,10 +503,17 @@ export function BuilderClient({
   projectId,
   initialMessages,
   initialFiles,
+  kickoffBrief,
 }: {
   projectId: string;
   initialMessages: BuilderUIMessage[];
   initialFiles: WorkspaceFile[];
+  /**
+   * Brief handed over from /new via ?kickoff=1 (fresh projects only —
+   * the server gates on zero messages). When set, it is auto-sent as the
+   * first chat message so creating an app starts generating it.
+   */
+  kickoffBrief?: string | null;
 }) {
   const [files, setFiles] = useState<WorkspaceFile[]>(initialFiles);
   const [activeFile, setActiveFile] = useState<string | null>(
@@ -555,6 +562,29 @@ export function BuilderClient({
       refreshFiles();
     },
   });
+
+  // Auto-start the first generation from the /new handoff brief.
+  // The send is deferred one tick (setTimeout 0) past React Strict Mode's
+  // simulated double-mount: a send issued synchronously in the mount
+  // effect is aborted when dev tears the first mount down, silently
+  // losing the request. The guard is checked inside the timer so the
+  // surviving mount is the one that sends, and sendMessageRef always
+  // targets the live instance.
+  const kickoffSentRef = useRef<boolean>(false);
+  const sendMessageRef = useRef(sendMessage);
+  useEffect(() => {
+    sendMessageRef.current = sendMessage;
+  }, [sendMessage]);
+  useEffect(() => {
+    if (!kickoffBrief || status !== "ready") return;
+    const timer = setTimeout(() => {
+      if (kickoffSentRef.current) return;
+      kickoffSentRef.current = true;
+      window.history.replaceState(null, "", `/app/${projectId}`);
+      sendMessageRef.current({ text: kickoffBrief });
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [kickoffBrief, status, projectId]);
 
   // Collect streamed file updates into local workspace state.
   const pendingFiles = useRef<Map<string, FileUpdate>>(new Map());

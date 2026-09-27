@@ -238,7 +238,11 @@ export default function NewAppPage() {
         body: JSON.stringify({ name: finalName, description: finalDescription }),
       });
       const data = await res.json();
-      router.push(`/app/${data.project.id}`);
+      // ?kickoff=1 tells the workbench to auto-send the stored brief as the
+      // first chat message — creating an app should start generating it.
+      // The server only honors it while the project has zero messages, so
+      // refresh/back-forward can never re-trigger a generation.
+      router.push(`/app/${data.project.id}?kickoff=1`);
     } finally {
       setCreating(false);
     }

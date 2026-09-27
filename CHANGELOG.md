@@ -10,6 +10,56 @@ and CI goes green — see [CONTRIBUTING.md](CONTRIBUTING.md) for the release
 process. Download zips: the
 [Releases page](https://github.com/Creative-hub554/Base88Plus/releases/latest).
 
+## [0.2.4] — 2026-09-27
+
+CI-hardening release: the monthly snapshot bot push went from silently
+broken to tripwired, and the promotion-day verifiers now get exercised
+every week instead of only on their dates. No application behavior
+changes — everything here is workflow, tooling, and docs.
+
+### Added
+
+- **Snapshot push tripwired from three angles** — the deploy-key bot
+  push used to be able to die invisibly behind a green run. The monthly
+  refresh now exports its push outcome as a `snapshot-push-ok` /
+  `-failed` / `-skipped` run artifact (#32), a freshness check in the
+  CI matrix job fails the run when the committed snapshot is more than
+  30 days stale, so the outage fallback alarms instead of quietly
+  rotting (#27), and both runbook verifiers read that artifact FIRST
+  when judging a cron run, so a dead push can no longer masquerade as a
+  graceful no-op (#34)
+- **Weekly verifier drill** — a new `verifier-drill` workflow runs every
+  Monday 08:23 UTC (+ on-demand dispatch), fires nothing, and needs no
+  secrets: it picks the latest successful CI run on `main` and
+  smoke-runs BOTH promotion-day verifiers against it
+  (`VERIFY_FORCE=1 DRY_RUN=1 SMOKE_RUN_ID`), with date-aware verdict
+  assertions so the pre-promotion canary state is a pass, not a false
+  alarm. Verifier logs are embedded in the run summary; any failure
+  drops a reminder comment on the promotion-day issue (#34–#36)
+- **Promotion-day verifiers are tracked code now** —
+  `scripts/verify-oct3.ps1` and `scripts/verify-oct28.ps1` moved out of
+  local scratch into the repo, with a `VERIFY_TOKEN` override so they
+  run on CI; the Windows Credential Manager path stays the default
+  locally (#34)
+- **Manual dispatch for CI** — `ci.yml` gained a `workflow_dispatch`
+  trigger with an opt-in `force_snapshot_refresh` input (pinned to the
+  default branch), so promotion-day verification can be fired by hand
+  without waiting for the monthly cron or pushing an empty commit (#28)
+
+### Fixed
+
+- **The monthly snapshot push actually works** — two-stage repair after
+  the cron rehearsal exposed a push that died before authenticating:
+  the runner now pins the `ssh.github.com:443` host key via
+  `ssh-keyscan` (TOFU backstop) (#29), and the deploy key was rotated to
+  a URL-commented key so `webfactory/ssh-agent` writes the per-host SSH
+  config itself — the bot push goes out over `git@github.com:22` with no
+  hand-maintained config. The old key was deleted only after the new
+  one was proven end-to-end on a real push (#30)
+- **Runbook updated** — the ops notes now carry the full
+  host-key/deploy-key/tripwire arc, the verifier smoke harness gotchas,
+  and the token-rotation state (#33)
+
 ## [0.2.3] — 2026-09-26
 
 Onboarding-release: everything here came out of a fresh-clone newcomer
@@ -173,6 +223,7 @@ was superseded by the 0.2.0 bump before anything was ever published. No
 artifacts exist for this version; it is recorded here so the semver story
 stays honest.
 
+[0.2.4]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.4
 [0.2.3]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.3
 [0.2.2]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.2
 [0.2.1]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.1

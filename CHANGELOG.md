@@ -10,6 +10,17 @@ and CI goes green — see [CONTRIBUTING.md](CONTRIBUTING.md) for the release
 process. Download zips: the
 [Releases page](https://github.com/Creative-hub554/Base88Plus/releases/latest).
 
+## [Unreleased]
+
+### Added
+
+- Project import — the return leg of the portability story: "Import zip" on
+  the dashboard accepts an Anybase export (or any static-site zip), creates
+  a fresh project from the sanitized entries, and lands you in the builder.
+  Per-entry skip reasons are surfaced (traversal paths, macOS/Windows junk,
+  binary assets, size outliers), so one poison file never blocks the rest
+  of the bundle.
+
 ## [0.2.9] — 2026-09-29
 
 Sixth release of the day: promotion day gets the same autonomous treatment

@@ -10,7 +10,10 @@ and CI goes green — see [CONTRIBUTING.md](CONTRIBUTING.md) for the release
 process. Download zips: the
 [Releases page](https://github.com/Creative-hub554/Base88Plus/releases/latest).
 
-## [Unreleased]
+## [0.4.0] - 2026-09-29
+
+Ninth release and the arc's capstone: projects can carry real images and
+fonts — through export, import, publish, restore, and deploy — byte-exact.
 
 ### Added
 

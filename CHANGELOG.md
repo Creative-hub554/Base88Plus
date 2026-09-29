@@ -10,6 +10,19 @@ and CI goes green — see [CONTRIBUTING.md](CONTRIBUTING.md) for the release
 process. Download zips: the
 [Releases page](https://github.com/Creative-hub554/Base88Plus/releases/latest).
 
+## [Unreleased]
+
+### Added
+
+- Drag-and-drop asset upload in the builder file panel: click "+" or drop
+  images/fonts onto the file list to add them to a project directly — no
+  zip round-trip, no chat detour. The server re-validates everything
+  (extension allowlist, 2 MB per-asset cap, basename-only filenames,
+  duplicates rejected with an explicit error — replace via zip import).
+  The extension allowlist now lives in one isomorphic module shared by
+  the store's disk kernel, the importer, the upload route, and the
+  picker's accept list.
+
 ## [0.4.0] - 2026-09-29
 
 Ninth release and the arc's capstone: projects can carry real images and

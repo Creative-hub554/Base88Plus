@@ -5,6 +5,7 @@ import { DefaultChatTransport } from "ai";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { BuilderUIMessage, FileUpdate } from "@/lib/types";
 import { choose, notify, ToastHost } from "./toast";
+import { FilePanel } from "./asset-uploader";
 
 interface WorkspaceFile {
   path: string;
@@ -1125,24 +1126,16 @@ export function BuilderClient({
             </div>
           ) : (
             <div className="flex min-h-0 flex-1">
-              <aside className="w-56 shrink-0 overflow-y-auto border-r border-neutral-800 p-2">
-                {files.map((f) => (
-                  <button
-                    key={f.path}
-                    onClick={() => {
-                      setActiveFile(f.path);
-                      setTab("code");
-                    }}
-                    className={`block w-full truncate rounded px-2 py-1.5 text-left text-xs ${
-                      activeFile === f.path
-                        ? "bg-neutral-800 text-white"
-                        : "text-neutral-400 hover:bg-neutral-900"
-                    }`}
-                  >
-                    {f.path}
-                  </button>
-                ))}
-              </aside>
+              <FilePanel
+                projectId={projectId}
+                files={files}
+                activeFile={activeFile}
+                onFileSelect={(p) => {
+                  setActiveFile(p);
+                  setTab("code");
+                }}
+                onUploaded={() => void refreshFiles()}
+              />
               <div className="flex min-w-0 flex-1 flex-col">
                 {tab === "preview" ? (
                   <div className="flex min-h-0 flex-1 flex-col">

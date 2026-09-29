@@ -9,8 +9,11 @@ tests/generated/<app-name>/
 ```
 
 `npm run verify:app -- --all` runs every pin; the step lives in
-`.github/actions/gates-steps` so both the blocking gates job and the canary
-run it on every push and PR.
+`.github/actions/gates-steps` (run with `--strict`) so both the blocking
+gates job and the canary run it on every push and PR. Under `--strict`, a
+pin whose app queries `#id`/`.class` selectors its assertions never seeded
+fails — that pattern is id-drift (the app querying elements its own HTML
+doesn't define), which a plain stub otherwise hides.
 
 Why pins exist: the live generated workspaces under `projects-data/` are
 **gitignored runtime data**, so CI cannot see them. A pin is the regression

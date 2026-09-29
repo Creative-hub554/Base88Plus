@@ -16,6 +16,7 @@
     "lint": "eslint .",
     "check:node": "node scripts/check-node-contract.js",
     "check:schedule-age": "node scripts/check-snapshot-age.js",
+    "check:deploy-key": "node scripts/check-deploy-key.js",
     "update:schedule": "node scripts/update-schedule.js",
     "rotate": "node scripts/rotate.mjs",
     "verify:app": "node scripts/verify-generated-app.js",

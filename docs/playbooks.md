@@ -16,7 +16,7 @@ later API queries (CI runs, artifacts).
 
 ## 1. PR shepherd (~10 min/cycle)
 
-The one true path for landing anything. Used for #43–#61 without a single
+The one true path for landing anything. Used for #43–#65 without a single
 failed landing once the payload-file rule was learned.
 
 ```bash
@@ -73,6 +73,20 @@ sha.
   python cannot open msys `/tmp/...` (bash redirects and curl can).
 - Windows python + msys paths: write with `> file`, read with `< file` or
   workspace-relative paths. Never `open('/tmp/...')` in python.
+- Route tests that read multipart bodies need `// @vitest-environment node`
+  as the FIRST line of the file: undici's `Request.formData()` parser (what
+  the Next route runs on) chokes on jsdom's Blob with a realm-flavored
+  TypeError. Hand-craft the multipart body (Buffer parts + boundary header)
+  — it also pins the exact wire shape the browser sends. Pattern:
+  `tests/zip-import-route.test.ts`.
+- A Freebuff session restart loses git identity: `git commit` dies with
+  "Author identity unknown". Never edit git config — the one-shot
+  `git -c user.name=… -c user.email=…` flags in step 1 are load-bearing,
+  not decorative (values from `git log --format='%an <%ae>' main`).
+- A fresh checkout's `main` has no upstream: a bare `git pull` fails with
+  "no tracking information". Sync explicitly — `git pull --ff-only origin
+  main` — or use the `git fetch origin main` + `git merge --ff-only
+  origin/main` pair in step 6.
 
 ---
 
@@ -88,7 +102,7 @@ sha.
    and package-lock.json (the `0,` replaces only the FIRST occurrence), then
    `npm install --package-lock-only --ignore-scripts`. Verify counts: 1× in
    package.json, 2× in the lock, zero remnants.
-4. Battery: `npm test` (245), `npx tsc --noEmit`, `npx eslint .`,
+4. Battery: `npm test` (266), `npx tsc --noEmit`, `npx eslint .`,
    `npm run verify:generated -- --strict` (44/44).
 5. Shepherd PR (title `chore(release): vX.Y.Z`), squash as
    `chore(release): vX.Y.Z (#N)`, ff main.

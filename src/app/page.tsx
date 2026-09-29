@@ -5,6 +5,7 @@ import {
   getPublishManifest,
   listProjects,
 } from "@/lib/store";
+import { ImportZipButton } from "@/components/import-button";
 
 export const dynamic = "force-dynamic";
 
@@ -60,6 +61,7 @@ export default function HomePage() {
         >
           Settings → AI Providers
         </Link>
+        <ImportZipButton />
       </section>
 
       <section>

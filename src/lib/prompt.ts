@@ -127,7 +127,25 @@ tool), ship a real website:
   <meta name="description">, Open Graph tags, semantic HTML5 (header, nav,
   main, section, footer), alt text on images, visible focus styles, and a
   footer with the year.
-- Include empty states and user-friendly error messages in interactive apps.`;
+- Include empty states and user-friendly error messages in interactive apps.
+
+## Interactive apps: state and timers
+
+A mode / UI-state function (one that flips CSS classes, headings or
+visibility, e.g. setMode(true, false)) must be the single writer of that
+state:
+
+- Call it exactly ONCE per user action. Never call it a second time later in
+  the same handler with different arguments — the later call silently
+  overwrites the earlier one (the UI flashes the new mode, then reverts).
+- If a handler auto-starts a timer inside \`if (ticking === null) { ... }\`,
+  only start the timer there. Do not re-apply mode or visuals in that block;
+  they are already set.
+- Apply only the target state. Never "reset" to a default mode at the top of
+  an action handler before applying the real one.
+- Phase changes (e.g. work -> break -> work) happen where the timer expires,
+  inside the tick handler, so every phase is visibly entered and exited;
+  update counters/credits at the same place.\n`;
 
 export interface ParsedFile {
   path: string;

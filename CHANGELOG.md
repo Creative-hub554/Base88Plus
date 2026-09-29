@@ -10,7 +10,10 @@ and CI goes green — see [CONTRIBUTING.md](CONTRIBUTING.md) for the release
 process. Download zips: the
 [Releases page](https://github.com/Creative-hub554/Base88Plus/releases/latest).
 
-## [Unreleased]
+## [0.5.0] - 2026-09-29
+
+Tenth release: assets now enter projects as easily as files do — drop
+them on the file panel.
 
 ### Added
 

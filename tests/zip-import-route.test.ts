@@ -78,7 +78,8 @@ describe("import route — API contract", () => {
 
     // Valid zip → 201 with project + importedCount + skipped reasons.
     // The UI derives the app name from the filename and sends it as a
-    // field; a name field must win over the default.
+    // field; a name field must win over the default. Binary assets are
+    // first-class now — the PNG imports with the base64 string layer.
     const good = await zipOf({
       "index.html": "<p>hi</p>",
       "img/x.png": new Uint8Array([1, 2, 3]),
@@ -88,10 +89,8 @@ describe("import route — API contract", () => {
     );
     expect(ok.status).toBe(201);
     const data = await ok.json();
-    expect(data.importedCount).toBe(1);
-    expect(data.skipped).toEqual([
-      { path: "img/x.png", reason: "binary file (not text)" },
-    ]);
+    expect(data.importedCount).toBe(2);
+    expect(data.skipped).toEqual([]);
     expect(data.project.name).toBe("app");
     expect(data.project.description).toBe("restored");
 

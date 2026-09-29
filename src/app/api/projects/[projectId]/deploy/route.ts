@@ -9,6 +9,7 @@ import {
   restoreDeployVersion,
   setProjectDeployment,
   recordDeployVersion,
+  isBinaryPath,
 } from "@/lib/store";
 import { cfCredentials, cfSubdomain, getSettings } from "@/lib/providers/gateway";
 import type { ProjectFile } from "@/lib/types";
@@ -86,11 +87,16 @@ export async function POST(
     );
   }
 
-  // Materialize the snapshot files for the deploy engine.
+  // Materialize the snapshot files for the deploy engine — binary assets
+  // carry their base64 string layer so the engine hashes/uploads bytes.
   const files: ProjectFile[] = [];
   for (const path of manifest.files) {
     const content = readPublishedFile(projectId, path);
-    if (content !== null) files.push({ path, content });
+    if (content !== null) {
+      files.push(
+        isBinaryPath(path) ? { path, content, encoding: "base64" } : { path, content },
+      );
+    }
   }
 
   try {

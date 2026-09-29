@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { contentTypeFor } from "@/lib/content-types";
-import { getProject, readAppFile } from "@/lib/store";
+import { getProject, readAppFile, isBinaryPath } from "@/lib/store";
 import { injectStorageShim } from "@/lib/preview-storage-shim";
 
 /**
@@ -33,5 +33,9 @@ export async function GET(
   // Relax same-origin restrictions so the sandboxed iframe can load assets.
   headers["Content-Security-Policy"] =
     "sandbox allow-scripts allow-forms allow-modals allow-popups";
-  return new Response(content, { headers });
+  // Binary assets ride the string layer as base64 — emit raw bytes.
+  const body: BodyInit = isBinaryPath(filePath)
+    ? Buffer.from(content, "base64")
+    : content;
+  return new Response(body, { headers });
 }

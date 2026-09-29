@@ -10,6 +10,21 @@ and CI goes green — see [CONTRIBUTING.md](CONTRIBUTING.md) for the release
 process. Download zips: the
 [Releases page](https://github.com/Creative-hub554/Base88Plus/releases/latest).
 
+## [Unreleased]
+
+### Added
+
+- Binary asset support — projects can now contain real images and fonts.
+  Binary assets (png/jpg/webp/gif/ico/woff/woff2/ttf/otf/mp3/mp4/webm/pdf/
+  wasm/zip/…) ride the file layer as base64 (`encoding: "base64"`) and are
+  written to disk as raw bytes, so they survive export → import
+  byte-exact, publish, restore, fork, deploy versions, and Cloudflare
+  deploys (hashed and uploaded as true bytes). Serving routes (preview,
+  public /p page, template gallery, version history) emit the raw bytes
+  with proper content types; the code editor shows a size summary instead
+  of a base64 wall; the generation prompt lists binary assets by name
+  instead of inlining their contents into the model's context.
+
 ## [0.3.1] - 2026-09-29
 
 Eighth release, second of the portability arc: an export now carries its

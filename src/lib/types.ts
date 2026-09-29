@@ -1,6 +1,15 @@
+/**
+ * One file of a generated app. Text files carry plain UTF-8 in `content`;
+ * binary assets (images, fonts, media — detected by extension at every
+ * disk boundary) carry base64 with `encoding: "base64"`, so the string
+ * layer survives JSON serialization (chat data parts, files API) without
+ * corruption. Decode with the store's `fileBytes` — never assume UTF-8.
+ */
 export interface ProjectFile {
   path: string;
   content: string;
+  /** Present only when `content` is base64-encoded binary. */
+  encoding?: "base64";
 }
 
 export interface Project {

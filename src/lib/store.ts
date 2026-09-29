@@ -196,7 +196,7 @@ export function publishProject(
     const abs = path.resolve(dir, f.path);
     if (!abs.startsWith(path.resolve(dir))) continue;
     ensureDir(path.dirname(abs));
-    fs.writeFileSync(abs, f.content, "utf8");
+    writeProjectBytes(abs, f.content, f.encoding ?? (isBinaryPath(f.path) ? "base64" : "utf8"));
     files.push(f.path);
   }
   const manifest: PublishManifest = {
@@ -409,7 +409,7 @@ export function recordTurnSnapshot(
     const abs = path.resolve(dir, f.path);
     if (!abs.startsWith(path.resolve(dir))) continue;
     ensureDir(path.dirname(abs));
-    fs.writeFileSync(abs, f.content, "utf8");
+    writeProjectBytes(abs, f.content, f.encoding ?? (isBinaryPath(f.path) ? "base64" : "utf8"));
   }
   const entry: TurnSnapshotEntry = {
     messageId,
@@ -472,11 +472,17 @@ function readSnapshotDirFiles(dir: string): ProjectFile[] {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
       const full = path.join(d, e.name);
       if (e.isDirectory()) walk(full);
-      else
+      else {
+        const rel = path.relative(dir, full).split(path.sep).join("/");
+        const binary = isBinaryPath(rel);
         files.push({
-          path: path.relative(dir, full).split(path.sep).join("/"),
-          content: fs.readFileSync(full, "utf8"),
+          path: rel,
+          content: binary
+            ? fs.readFileSync(full).toString("base64")
+            : fs.readFileSync(full, "utf8"),
+          ...(binary ? { encoding: "base64" as const } : {}),
         });
+      }
     }
   };
   walk(dir);
@@ -548,7 +554,7 @@ export function readTurnSnapshotFile(
   const abs = path.resolve(dir, normalized);
   if (!abs.startsWith(path.resolve(dir) + path.sep)) return null;
   try {
-    return fs.readFileSync(abs, "utf8");
+    return readProjectBytes(abs, isBinaryPath(filePath) ? "base64" : "utf8");
   } catch {
     return null;
   }
@@ -773,7 +779,7 @@ export function recordDeployVersion(
     const abs = path.resolve(dir, f.path);
     if (!abs.startsWith(path.resolve(dir))) continue;
     ensureDir(path.dirname(abs));
-    fs.writeFileSync(abs, f.content, "utf8");
+    writeProjectBytes(abs, f.content, f.encoding ?? (isBinaryPath(f.path) ? "base64" : "utf8"));
   }
   const entry: StoredDeployVersion = {
     version,
@@ -840,7 +846,7 @@ export function readDeployVersionFile(
   const abs = path.resolve(base, normalized);
   if (!abs.startsWith(base)) return null;
   try {
-    return fs.readFileSync(abs, "utf8");
+    return readProjectBytes(abs, isBinaryPath(filePath) ? "base64" : "utf8");
   } catch {
     return null;
   }
@@ -910,7 +916,7 @@ export function readPublishedFile(
   const abs = path.resolve(publishedDir(projectId), normalized);
   if (!abs.startsWith(path.resolve(publishedDir(projectId)))) return null;
   try {
-    return fs.readFileSync(abs, "utf8");
+    return readProjectBytes(abs, isBinaryPath(filePath) ? "base64" : "utf8");
   } catch {
     return null;
   }
@@ -919,6 +925,51 @@ export function readPublishedFile(
 // ---------------------------------------------------------------------------
 // Generated app files
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Disk encoding — text vs binary assets
+//
+// A ProjectFile's string layer carries UTF-8 for text and BASE64 for
+// binary assets (encoding: "base64"), so JSON serialization (chat data
+// parts, files API) survives untouched. Binary is detected by EXTENSION
+// at every disk boundary: disk is bytes, the kernel chooses utf8 or
+// base64, and callers keep their string contract. One list, one truth.
+// ---------------------------------------------------------------------------
+
+export const BINARY_EXTENSIONS = [
+  "png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico", "svgz",
+  "woff", "woff2", "ttf", "otf", "eot",
+  "mp3", "wav", "ogg", "m4a", "mp4", "webm", "mov",
+  "pdf", "zip", "gz", "wasm",
+] as const;
+
+const BINARY_EXT_SET = new Set<string>(BINARY_EXTENSIONS);
+
+/** True when the path's extension marks a binary asset. */
+export function isBinaryPath(p: string): boolean {
+  const ext = p.split(".").pop()?.toLowerCase() ?? "";
+  return BINARY_EXT_SET.has(ext);
+}
+
+/** Read one project file from disk in the declared encoding. */
+function readProjectBytes(abs: string, encoding: "utf8" | "base64"): string {
+  const raw = fs.readFileSync(abs);
+  return encoding === "base64" ? raw.toString("base64") : raw.toString("utf8");
+}
+
+/** Write one project file to disk, encoding text as UTF-8 and binary
+ *  (base64 in the string layer) back to raw bytes. */
+function writeProjectBytes(
+  abs: string,
+  content: string,
+  encoding: "utf8" | "base64",
+) {
+  if (encoding === "base64") {
+    fs.writeFileSync(abs, Buffer.from(content, "base64"));
+  } else {
+    fs.writeFileSync(abs, content, "utf8");
+  }
+}
 
 function appFilePath(projectId: string, filePath: string): string {
   const normalized = path.normalize(filePath).replace(/^([/\\])+/, "");
@@ -929,10 +980,25 @@ function appFilePath(projectId: string, filePath: string): string {
   return abs;
 }
 
-export function saveAppFile(projectId: string, filePath: string, content: string) {
+export function saveAppFile(
+  projectId: string,
+  filePath: string,
+  content: string,
+  encoding?: "base64",
+) {
   const abs = appFilePath(projectId, filePath);
   ensureDir(path.dirname(abs));
-  fs.writeFileSync(abs, content, "utf8");
+  writeProjectBytes(abs, content, encoding ?? (isBinaryPath(filePath) ? "base64" : "utf8"));
+}
+
+/**
+ * Create-or-replace a workspace file, choosing the disk encoding from the
+ * declared encoding when given, else from the path extension.
+ */
+export function writeProjectFile(projectId: string, file: ProjectFile) {
+  const abs = appFilePath(projectId, file.path);
+  ensureDir(path.dirname(abs));
+  writeProjectBytes(abs, file.content, file.encoding ?? (isBinaryPath(file.path) ? "base64" : "utf8"));
 }
 
 export function deleteAppFile(projectId: string, filePath: string) {
@@ -945,10 +1011,21 @@ export function deleteAppFile(projectId: string, filePath: string) {
 
 export function readAppFile(projectId: string, filePath: string): string | null {
   try {
-    return fs.readFileSync(appFilePath(projectId, filePath), "utf8");
+    return readProjectBytes(
+      appFilePath(projectId, filePath),
+      isBinaryPath(filePath) ? "base64" : "utf8",
+    );
   } catch {
     return null;
   }
+}
+
+/** Decode a ProjectFile's string content to bytes (respects encoding). */
+export function fileBytes(f: ProjectFile): Buffer {
+  return Buffer.from(
+    f.content,
+    f.encoding ?? (isBinaryPath(f.path) ? "base64" : "utf8"),
+  );
 }
 
 /**
@@ -976,7 +1053,8 @@ export function restoreWorkspace(
   for (const f of listAppFiles(projectId)) {
     if (!before.has(f.path)) deleteAppFile(projectId, f.path);
   }
-  for (const f of snapshot) saveAppFile(projectId, f.path, f.content);
+  for (const f of snapshot)
+    saveAppFile(projectId, f.path, f.content, f.encoding);
 }
 
 export function listAppFiles(projectId: string): ProjectFile[] {
@@ -1003,10 +1081,15 @@ export function listAppFiles(projectId: string): ProjectFile[] {
           continue;
         }
         walk(full);
-      } else if (entry.isFile() && !INTERNAL.has(entry.name)) {
+      }    else if (entry.isFile() && !INTERNAL.has(entry.name)) {
+        const rel = path.relative(base, full).split(path.sep).join("/");
+        const binary = isBinaryPath(rel);
         out.push({
-          path: path.relative(base, full).split(path.sep).join("/"),
-          content: fs.readFileSync(full, "utf8"),
+          path: rel,
+          content: binary
+            ? fs.readFileSync(full).toString("base64")
+            : fs.readFileSync(full, "utf8"),
+          ...(binary ? { encoding: "base64" as const } : {}),
         });
       }
     }

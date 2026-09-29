@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { readAppFile } from "@/lib/store";
+import { readAppFile, isBinaryPath } from "@/lib/store";
 import { templateProjectId } from "@/lib/templates";
 import { contentTypeFor } from "@/lib/content-types";
 
@@ -27,7 +27,11 @@ export async function GET(
     return new Response("Not found", { status: 404 });
   }
 
-  return new Response(content, {
+  // Binary assets ride the string layer as base64 — emit raw bytes.
+  const body: BodyInit = isBinaryPath(filePath)
+    ? Buffer.from(content, "base64")
+    : content;
+  return new Response(body, {
     headers: {
       "Content-Type": contentTypeFor(filePath),
       // Thumbnails are immutable per generatedAt version query param.

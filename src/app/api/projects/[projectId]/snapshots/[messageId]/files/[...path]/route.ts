@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { readTurnSnapshotFile } from "@/lib/store";
+import { readTurnSnapshotFile, isBinaryPath } from "@/lib/store";
 import { contentTypeFor } from "@/lib/content-types";
 
 /**
@@ -15,13 +15,18 @@ export async function GET(
   if (path.length === 0) {
     return new Response("Not found", { status: 404 });
   }
-  const content = readTurnSnapshotFile(projectId, messageId, path.join("/"));
+  const filePath = path.join("/");
+  const content = readTurnSnapshotFile(projectId, messageId, filePath);
   if (content === null) {
     return new Response("Not found", { status: 404 });
   }
-  return new Response(content, {
+  // Binary assets ride the string layer as base64 — emit raw bytes.
+  const body: BodyInit = isBinaryPath(filePath)
+    ? Buffer.from(content, "base64")
+    : content;
+  return new Response(body, {
     headers: {
-      "Content-Type": contentTypeFor(path.join("/")),
+      "Content-Type": contentTypeFor(filePath),
       // Snapshots are immutable; the panel re-fetches the list per open.
       "Cache-Control": "no-store",
     },

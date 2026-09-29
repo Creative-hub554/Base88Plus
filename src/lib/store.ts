@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { ASSET_EXTENSIONS, isAssetPath } from "./asset-extensions";
 import type {
   BuilderUIMessage,
   CustomDomain,
@@ -936,20 +937,10 @@ export function readPublishedFile(
 // base64, and callers keep their string contract. One list, one truth.
 // ---------------------------------------------------------------------------
 
-export const BINARY_EXTENSIONS = [
-  "png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico", "svgz",
-  "woff", "woff2", "ttf", "otf", "eot",
-  "mp3", "wav", "ogg", "m4a", "mp4", "webm", "mov",
-  "pdf", "zip", "gz", "wasm",
-] as const;
-
-const BINARY_EXT_SET = new Set<string>(BINARY_EXTENSIONS);
+export const BINARY_EXTENSIONS = ASSET_EXTENSIONS;
 
 /** True when the path's extension marks a binary asset. */
-export function isBinaryPath(p: string): boolean {
-  const ext = p.split(".").pop()?.toLowerCase() ?? "";
-  return BINARY_EXT_SET.has(ext);
-}
+export const isBinaryPath = isAssetPath;
 
 /** Read one project file from disk in the declared encoding. */
 function readProjectBytes(abs: string, encoding: "utf8" | "base64"): string {

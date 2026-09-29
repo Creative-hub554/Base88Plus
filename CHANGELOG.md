@@ -29,6 +29,51 @@ process. Download zips: the
   that credential dies. Fork PRs auto-SKIP (they get no repo secrets);
   offline `--self-test` fixtures cover the verdict matrix.
 
+## [0.2.8] — 2026-09-29
+
+Fifth release of the day, and an infrastructure-ops one: the monthly
+snapshot-refresh path went from silently broken to self-healing. It started
+with a test-fire that caught a dead deploy-key push (the grant-revocation
+pass had removed the key and the ruleset bypass actor), and ended with the
+repo auditing its own credentials on every CI run. No application behavior
+changes.
+
+### Added
+
+- **Deploy-key preflight on every CI run** — `npm run check:deploy-key`
+  audits the three legs the monthly snapshot push rides on (a write-enabled
+  deploy key, the main-protection ruleset's DeployKey bypass actor, and the
+  `DEPLOY_KEY_PEM` secret). A silent revocation now turns CI red within
+  days instead of surfacing only on cron day. Uses the `PREFLIGHT_TOKEN`
+  secret because `administration: read` is a GitHub App–only permission no
+  `GITHUB_TOKEN` can hold; fork PRs auto-SKIP; offline `--self-test` covers
+  the verdict matrix (#53)
+- **Rotation re-mints the cron deploy key** — `npm run rotate` now re-mints
+  the full deploy-key path after every token swap: new keypair, write-enabled
+  registration, additive ruleset rebind, sealed `DEPLOY_KEY_PEM`, sealed
+  `PREFLIGHT_TOKEN`, strict preflight, and only then old-key deletion. New
+  flags: `--deploy-key-only`, `--skip-deploy-key`, `--keep-old-keys` (#54)
+- **Pure-Node libsodium sealed box** — `scripts/rotation/sealed-box.mjs`
+  (tweetnacl + blakejs) implements `crypto_box_seal` exactly, nonce =
+  BLAKE2b-192(ephPub ‖ recipientPub), KAT-verified against stdlib
+  `hashlib.blake2b(digest_size=24)` and proven by GitHub accepting its
+  secrets; ten offline tests pin the construction (#54)
+- **Cron-day Oct 3 verifier workflow** — `oct3-verify.yml` runs
+  `scripts/verify-oct3.ps1` for real on Oct 3 (07:47 / 09:07 / 19:17 UTC)
+  and posts the verdict on issue #18; a dispatch smoke mode proves the
+  plumbing any day (`SMOKE_PASS_UNCHANGED` proven live on Sep 29) (#55)
+- **One-command cron-day check** — `npm run check:oct3` answers
+  CONFIRMED_PASS / ATTENTION / NOT_YET from the scheduled runs and the #18
+  verdicts, with exit codes for scripting (#56)
+
+### Fixed
+
+- **The Oct 3 snapshot push path itself** — the Sep 29 test-fire failed with
+  `Permission denied (publickey)` because the repo had zero deploy keys and
+  the ruleset had lost its DeployKey bypass actor; re-minted key v3, resealed
+  the secret, rebound the actor, and re-fired to `snapshot-push-ok` with a
+  bot commit on main (#53 groundwork)
+
 ## [0.2.7] — 2026-09-29
 
 Fourth release of the day: the id-drift defect class gets closed at both
@@ -344,6 +389,7 @@ was superseded by the 0.2.0 bump before anything was ever published. No
 artifacts exist for this version; it is recorded here so the semver story
 stays honest.
 
+[0.2.8]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.8
 [0.2.7]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.7
 [0.2.6]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.6
 [0.2.5]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.5

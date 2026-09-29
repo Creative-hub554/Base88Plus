@@ -1,0 +1,88 @@
+# Oct 28 promotion-day verifier - runs scripts/verify-oct28.ps1 FOR REAL when
+# Node 26 promotes from canary to gate (2026-10-28) and posts the verdict on
+# issue #18. Before promotion day it is a date-aware smoke drill (same
+# plumbing, SMOKE_RUN_ID against the latest main CI run, nothing posted) whose
+# EXPECTED pre-promo verdict is SMOKE_FAIL_NOT_PROMOTED - 26 is still a
+# canary, so the verifier is SUPPOSED to say so; that verdict makes the drill
+# GREEN.
+#
+# Split of responsibilities on promotion day:
+#   - ci.yml gates: recompute the matrix from the release schedule (26 becomes
+#     a required leg automatically) - but ONLY on the next CI event.
+#   - oct28-verify.yml: posts the NO_DISPATCH_RUN verdict (exit 0, by design)
+#     until a workflow_dispatch CI run exists that day, then verifies the
+#     promotion on it. FIRING that dispatch stays a deliberate operator act -
+#     this workflow never fires ci.yml (GITHUB_TOKEN-triggered events do not
+#     create runs anyway) and never closes #18 (CLOSE=1 is reserved for the
+#     operator, after the @types/node 26 PR is tracked).
+name: Oct 28 verifier
+
+on:
+  schedule:
+    - cron: '23 7 28 10 *' # Oct 28, 07:23 UTC - before the operator's dispatch
+    - cron: '33 9 28 10 *' # Oct 28, 09:33 UTC - after a typical morning dispatch
+    - cron: '33 13 28 10 *'# Oct 28, 13:33 UTC - midday retry
+    - cron: '33 19 28 10 *'# Oct 28, 19:33 UTC - evening backstop
+  workflow_dispatch:
+    inputs:
+      smoke:
+        description: 'Smoke mode: verify plumbing against the latest successful main CI run (nothing posted, works on any date)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+  issues: write
+
+concurrency:
+  group: oct28-verify
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the verifier
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Run verify-oct28.ps1 (real, posts to #18) or smoke mode
+        id: verify
+        env:
+          VERIFY_TOKEN: ${{ github.token }}
+          SMOKE: ${{ inputs.smoke || 'false' }}
+        run: |
+          set -euo pipefail
+          if [ "$SMOKE" = "true" ]; then
+            rid=$(curl -s -H "Authorization: Bearer ${VERIFY_TOKEN}" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=main&status=success&per_page=1" \
+              | jq -r '.workflow_runs[0].id // ""')
+            [ -n "$rid" ] && [ "$rid" != "null" ] || { echo "no successful main CI run to smoke against"; exit 1; }
+            echo "SMOKE mode: verifying plumbing against CI run $rid (nothing will be posted)"
+            export VERIFY_FORCE=1 DRY_RUN=1 SMOKE_RUN_ID="$rid" VERIFY_EXPECT_CANARY=1
+            set +e
+            pwsh -NoProfile -File scripts/verify-oct28.ps1 | tee oct28-verify.log
+            echo "exit=$?" >> oct28-verify.log
+            exit 0
+          fi
+          echo "REAL mode: $(date -u '+%F %T') UTC - the verifier's own date gate decides"
+          set +e
+          pwsh -NoProfile -File scripts/verify-oct28.ps1 | tee oct28-verify.log
+          code=$?
+          echo "exit=$code" >> oct28-verify.log
+          case "$code" in
+            0) echo "verifier exit 0 (pass / NO_DISPATCH_RUN / in-progress / already recorded)";;
+            2) echo "date gate: not promotion day - nothing to do (schedule is a no-op today)";;
+            1) echo "verdict recorded - ATTENTION or FAIL (see the log above / issue #18)"; exit 1;;
+            *) echo "unexpected verifier exit $code"; exit 1;;
+          esac
+
+      - name: Attach the verifier log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: oct28-verify-log
+          path: oct28-verify.log
+          if-no-files-found: error

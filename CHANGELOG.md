@@ -14,20 +14,17 @@ process. Download zips: the
 
 ### Added
 
-- **Deploy-key preflight in CI** — every CI run now audits the three legs
-  the monthly snapshot push rides on (a write-enabled deploy key, the
-  main-protection ruleset's DeployKey bypass actor, and the existence of
-  the `DEPLOY_KEY_PEM` secret) via `npm run check:deploy-key`
-  ([scripts/check-deploy-key.js](scripts/check-deploy-key.js)). A silent
-  revocation — which took down the Sep 29 test-fire of the cron path —
-  now turns CI red within days instead of surfacing only on cron day.
-  The keys/rulesets legs need `administration: read`, which no
-  `GITHUB_TOKEN` can hold (it is a GitHub App–only permission — declaring
-  it in a workflow gets the whole file rejected), so the step uses the
-  `PREFLIGHT_TOKEN` secret (a fine-grained PAT: Administration read-only,
-  Actions read, this repo only) and fails loudly via `--require-audit` if
-  that credential dies. Fork PRs auto-SKIP (they get no repo secrets);
-  offline `--self-test` fixtures cover the verdict matrix.
+- **Oct 28 promotion-day verifier workflow** — `oct28-verify.yml` runs
+  `scripts/verify-oct28.ps1` for real on promotion day (four Oct-28-only
+  crons: 07:23 / 09:33 / 13:33 / 19:17 UTC) and posts the verdict on issue
+  #18. Firing the promotion dispatch and closing #18 stay deliberate
+  operator acts (`NO_DISPATCH_RUN` is exit 0 by design; `CLOSE=1` is never
+  set by the workflow). The date-aware smoke mode expects
+  `SMOKE_FAIL_NOT_PROMOTED` before promotion — the verifier is supposed to
+  say so while 26 is still a canary (#58)
+- **One-command promotion-day check** — `npm run check:oct28` answers
+  CONFIRMED_PASS / ATTENTION / NOT_YET from the scheduled runs and the #18
+  verdicts, routing `NO_DISPATCH_RUN` to the exact dispatch curl (#58)
 
 ## [0.2.8] — 2026-09-29
 

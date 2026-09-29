@@ -66,7 +66,14 @@ sha.
   `.freebuff/tmp/wfschema.json`; correct PyYAML's bare-`on:` → `True` quirk
   first).
 - Inline (non-file) JSON in curl on Windows silently fails → always
-  `--data-binary @file`.
+  `--data-binary @file`. But building the payload file with `printf` is
+  EQUALLY unsafe: printf processes backslash escapes in the format string
+  even when single-quoted, so `{\"ref\":\"main\"}`-style JSON arrives
+  mangled (the API answers "Problems parsing JSON", and non-ASCII chars
+  come out as cp1252 mojibake). Build payloads with
+  `python -c "import json,io; io.open(f,'w',encoding='utf-8').write(json.dumps(p))"`
+  or a python heredoc — the step 3/5 templates are load-bearing.
+  Verify before sending: `python -c "import json; json.load(open(f))"`.
 - Poll with the token attached: anonymous polling burns the 60/hr rate limit
   and the failure looks like a KeyError, not an error.
 - python that reads files must use workspace-relative paths — native Windows
@@ -90,7 +97,7 @@ sha.
 
 ---
 
-## 2. Release (v0.2.5–v0.2.9 shipped this way)
+## 2. Release (v0.2.5–v0.5.0 shipped this way)
 
 1. `git checkout -b release/vX.Y.Z` from a fresh main.
 2. CHANGELOG: convert the `Unreleased` block into `## [X.Y.Z] — <date>` with
@@ -101,8 +108,11 @@ sha.
    `sed -i '0,/"version": "X.Y.W"/s//"version": "X.Y.Z"/'` on package.json
    and package-lock.json (the `0,` replaces only the FIRST occurrence), then
    `npm install --package-lock-only --ignore-scripts`. Verify counts: 1× in
-   package.json, 2× in the lock, zero remnants.
-4. Battery: `npm test` (266), `npx tsc --noEmit`, `npx eslint .`,
+   package.json, 2× in the lock, zero remnants. A count ABOVE 2 can be
+   benign — a dependency may legitimately share the version (caught at
+   v0.4.0: `json-schema` and `type-check` are both 0.4.0) — verify the
+   actual matches before assuming drift.
+4. Battery: `npm test` (277), `npx tsc --noEmit`, `npx eslint .`,
    `npm run verify:generated -- --strict` (44/44).
 5. Shepherd PR (title `chore(release): vX.Y.Z`), squash as
    `chore(release): vX.Y.Z (#N)`, ff main.

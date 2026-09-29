@@ -10,7 +10,10 @@ and CI goes green — see [CONTRIBUTING.md](CONTRIBUTING.md) for the release
 process. Download zips: the
 [Releases page](https://github.com/Creative-hub554/Base88Plus/releases/latest).
 
-## [Unreleased]
+## [0.3.0] - 2026-09-29
+
+Seventh release and the first feature drop of the portability arc:
+projects can come back in, not just out.
 
 ### Added
 

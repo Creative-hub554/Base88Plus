@@ -25,6 +25,9 @@
  * Usage:
  *   node scripts/check-deploy-key.js                       (in CI: GITHUB_TOKEN env)
  *   node scripts/check-deploy-key.js --repo o/r --token t  (local override)
+ *   node scripts/check-deploy-key.js --require-audit       (SKIP becomes FAIL:
+ *        for same-repo CI runs, where the token CAN audit — a SKIP there means
+ *        the audit credential itself is dead/missing, which must go red)
  *   node scripts/check-deploy-key.js --self-test           (offline fixture suite)
  */
 'use strict';
@@ -137,6 +140,16 @@ function classify(input) {
   return { verdict: 'PASS', lines };
 }
 
+/**
+ * Verdict gate: under --require-audit a SKIP is a FAIL — on a same-repo run
+ * the token can always audit, so a skip means the audit credential is dead
+ * or missing, and a silently-unaudited preflight is exactly the failure
+ * mode this check exists to prevent.
+ */
+function finalVerdict(verdict, requireAudit) {
+  return requireAudit && verdict === 'SKIP' ? 'FAIL' : verdict;
+}
+
 /** Fetch live data (repo meta + keys + rulesets-with-actors + secret names). */
 async function gather(repo, token) {
   const meta = await ghGet(`/repos/${repo}`, token);
@@ -234,6 +247,23 @@ function selfTest() {
     }
   }
   console.log(`RESULT self-test ${failures === 0 ? 'PASS' : 'FAIL'} cases=${cases.length} fail=${failures}`);
+  // finalVerdict gate
+  const gateCases = [
+    ['PASS stays PASS with --require-audit', 'PASS', true, 'PASS'],
+    ['FAIL stays FAIL with --require-audit', 'FAIL', true, 'FAIL'],
+    ['SKIP becomes FAIL with --require-audit', 'SKIP', true, 'FAIL'],
+    ['SKIP stays SKIP without --require-audit', 'SKIP', false, 'SKIP'],
+  ];
+  for (const [name, verdict, requireAudit, expected] of gateCases) {
+    const got = finalVerdict(verdict, requireAudit);
+    if (got !== expected) {
+      console.error(`✗ self-test: gate ${name} — expected ${expected}, got ${got}`);
+      failures++;
+    } else {
+      console.log(`✓ self-test: gate ${name}`);
+    }
+  }
+  console.log(`RESULT self-test ${failures === 0 ? 'PASS' : 'FAIL'} cases=${cases.length + gateCases.length} fail=${failures}`);
   return failures === 0;
 }
 
@@ -244,6 +274,7 @@ async function main() {
   }
   const repoArgIdx = args.indexOf('--repo');
   const tokenArgIdx = args.indexOf('--token');
+  const requireAudit = args.includes('--require-audit');
   const repo = repoArgIdx !== -1 ? args[repoArgIdx + 1] : process.env.GITHUB_REPOSITORY;
   const token = tokenArgIdx !== -1 ? args[tokenArgIdx + 1] : process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
   if (!repo || !token) {
@@ -256,7 +287,12 @@ async function main() {
     console.log(`RESULT deploy-key-preflight SKIP repo=${repo} (repo meta HTTP ${data.repoError})`);
     process.exit(0);
   }
-  const { verdict, lines } = classify(data);
+  const result = classify(data);
+  const verdict = finalVerdict(result.verdict, requireAudit);
+  if (result.verdict === 'SKIP' && verdict === 'FAIL') {
+    result.lines.push('✗ --require-audit: the audit could not run — the token cannot read the administration endpoints (dead/expired/under-scoped PREFLIGHT_TOKEN?)');
+  }
+  const lines = result.lines;
   console.log(`deploy-key preflight for ${repo} (default branch: ${data.defaultBranch})`);
   for (const line of lines) console.log(line);
   console.log(`RESULT deploy-key-preflight ${verdict}`);

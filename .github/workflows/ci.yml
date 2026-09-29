@@ -61,12 +61,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # Only this job may write: the snapshot auto-commit. Everything else
-    # in the workflow stays read-only. The preflight adds two READ scopes:
-    # administration (deploy keys + rulesets) and actions (secrets list).
+    # in the workflow stays read-only. NOTE: there is deliberately no
+    # `administration` scope here — it is a GitHub App-only permission and
+    # any workflow declaring it is rejected outright (zero jobs, instant
+    # failure; PR #53's first push proved it). The preflight reads deploy
+    # keys + rulesets through the PREFLIGHT_TOKEN secret instead.
     permissions:
       contents: write
-      administration: read
-      actions: read
     outputs:
       legs: ${{ steps.compute.outputs.legs }}
       canary: ${{ steps.compute.outputs.canary }}
@@ -79,13 +80,20 @@ jobs:
       # the others — the 2026-09-29 test-fire died exactly that way and
       # only a manual test-fire noticed. This runs on EVERY run (PRs
       # included) so a silent revocation goes red within days, not on
-      # cron day. Fork PRs carry a token that cannot audit administration
-      # endpoints; the script SKIPs (exit 0) rather than false-failing
-      # a check the PR cannot influence.
+      # cron day. It needs administration:read, which NO GITHUB_TOKEN can
+      # ever hold (App-only), so it uses PREFLIGHT_TOKEN — a fine-grained
+      # PAT (Administration: read-only, Actions: read, this repo only).
+      # Rotate it together with the deploy key: a dead token is itself a
+      # FAIL here (--require-audit), never a silent skip. Fork PRs (no
+      # access to repo secrets) get a read-only token that cannot audit;
+      # the script SKIPs rather than false-failing a check the PR cannot
+      # influence.
       - name: Deploy-key preflight
-        run: node scripts/check-deploy-key.js
+        run: >-
+          node scripts/check-deploy-key.js
+          ${{ secrets.PREFLIGHT_TOKEN && github.repository == 'Creative-hub554/Base88Plus' && '--require-audit' || '' }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PREFLIGHT_TOKEN || secrets.GITHUB_TOKEN }}
 
       # The ruleset's bypass actor is the repo's Deploy keys ROLE, so the
       # scheduled snapshot push authenticates as a deploy key and skips the

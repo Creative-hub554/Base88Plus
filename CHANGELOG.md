@@ -21,8 +21,13 @@ process. Download zips: the
   ([scripts/check-deploy-key.js](scripts/check-deploy-key.js)). A silent
   revocation — which took down the Sep 29 test-fire of the cron path —
   now turns CI red within days instead of surfacing only on cron day.
-  Fork PRs auto-SKIP (their token cannot read the administration
-  endpoints); offline `--self-test` fixtures cover the verdict matrix.
+  The keys/rulesets legs need `administration: read`, which no
+  `GITHUB_TOKEN` can hold (it is a GitHub App–only permission — declaring
+  it in a workflow gets the whole file rejected), so the step uses the
+  `PREFLIGHT_TOKEN` secret (a fine-grained PAT: Administration read-only,
+  Actions read, this repo only) and fails loudly via `--require-audit` if
+  that credential dies. Fork PRs auto-SKIP (they get no repo secrets);
+  offline `--self-test` fixtures cover the verdict matrix.
 
 ## [0.2.7] — 2026-09-29
 

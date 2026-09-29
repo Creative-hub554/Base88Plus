@@ -10,6 +10,37 @@ and CI goes green — see [CONTRIBUTING.md](CONTRIBUTING.md) for the release
 process. Download zips: the
 [Releases page](https://github.com/Creative-hub554/Base88Plus/releases/latest).
 
+## [0.2.6] — 2026-09-29
+
+Third release of the day: the generated-app quality loop gets a clear-before-
+refill rule, two more regression pins, and a one-command pin helper. No
+application behavior changes — everything here is prompt, tooling, and CI.
+
+### Added
+
+- **Third CI pin: to-do list with storage** — `tests/generated/todo/` pins
+  add/toggle/remove flows, remaining-count semantics, localStorage
+  persistence (including a simulated reload), and a pinned quirk. Its
+  generation also surfaced the id-drift defect class (three id mismatches
+  against its own HTML, fixed before pinning) (#49)
+- **One-command pinning** — `npm run new:pin -- <projectId-or-dir>
+  <assertions.cjs>` resolves the project, validates the assertions up
+  front, copies the app verbatim, runs the full pin set, and rolls the new
+  pin back automatically if anything fails (#48)
+- **Harness fidelity upgrades** — `textContent` stringifies on assignment
+  like the real DOM, `className` syncs with `classList`, `el.dispatch(type)`
+  fires submit/keydown listeners, synthetic events carry
+  `preventDefault`/`stopPropagation`, and assertions files can require the
+  harness back (for reload-style tests) without circular-require surprises
+  (#49)
+
+### Changed
+
+- **Builder prompt: clear-before-refill** — handlers that rebuild a dynamic
+  list (summaries, results, logs) must clear the container first and rebuild
+  fresh; appending on every click stacks duplicate output forever. Pinned by
+  the regenerated wizard's refresh-not-append suite (#47)
+
 ## [0.2.5] — 2026-09-29
 
 Closing the loop on the generated-app pipeline: how apps get created, how
@@ -267,6 +298,7 @@ was superseded by the 0.2.0 bump before anything was ever published. No
 artifacts exist for this version; it is recorded here so the semver story
 stays honest.
 
+[0.2.6]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.6
 [0.2.5]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.5
 [0.2.4]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.4
 [0.2.3]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.3

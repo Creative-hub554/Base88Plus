@@ -16,7 +16,8 @@
     "lint": "eslint .",
     "check:node": "node scripts/check-node-contract.js",
     "check:schedule-age": "node scripts/check-snapshot-age.js",
-    "update:schedule": "node scripts/update-schedule.js"
+    "update:schedule": "node scripts/update-schedule.js",
+    "rotate": "node scripts/rotate.mjs"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.53",

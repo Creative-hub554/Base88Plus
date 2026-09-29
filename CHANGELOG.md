@@ -10,6 +10,50 @@ and CI goes green — see [CONTRIBUTING.md](CONTRIBUTING.md) for the release
 process. Download zips: the
 [Releases page](https://github.com/Creative-hub554/Base88Plus/releases/latest).
 
+## [0.2.5] — 2026-09-29
+
+Closing the loop on the generated-app pipeline: how apps get created, how
+they run in previews, and how their quality is enforced. Two behavior
+changes to the builder flow (#41, #42); the rest is generation-prompt
+guardrails, verification tooling, and CI (#43–#45).
+
+### Added
+
+- **Kickoff auto-generate** — creating an app from the `/new` gallery now
+  starts the first generation from the typed brief automatically (fires
+  once, only when the project has no messages yet, and survives React
+  Strict Mode's dev double-mount) (#41)
+- **Builder prompt guardrails against mode clobbering** — a new
+  "Interactive apps: state and timers" section in the builder system
+  prompt: a mode/UI-state function is the single writer and is called
+  exactly once per user action, auto-start blocks only start the timer,
+  and phase changes belong in the tick expiry branch where counters also
+  update (#44)
+- **Headless generated-app verifier** — `npm run verify:app` runs any
+  generated app in a `vm` sandbox with stubbed DOM/storage and a
+  manually-driven interval clock against a small per-app assertions file
+  (`setup`/`run` contract); exit 0 = `LOGIC_PASS`, matching the repo
+  verifier convention (#44)
+- **CI pins for generated apps** — apps pinned under
+  `tests/generated/<app>/` (verbatim `app.js` + `assertions.cjs`) are
+  re-verified on every push and PR in BOTH the blocking gates and the
+  canary via the shared gate steps, so a regeneration that reintroduces a
+  pinned bug fails CI instead of shipping silently. First pin: the
+  Pomodoro suite, whose mode-clobber guards were proven by mutant testing
+  (#45)
+- **One-command token rotation** — `npm run rotate` performs the full
+  CredMan credential rotation: preflight fingerprint read, supervised
+  GitHub device flow (long-runway code minting that survives flow
+  errors), swap with read-back verification and auto-rollback, then the
+  automated credential battery; operator runbook in `docs/rotation.md`
+  (#43)
+
+### Fixed
+
+- **Generated apps using localStorage no longer crash in previews** — the
+  preview runtime now installs a storage shim for sandboxed windows whose
+  storage accessors throw before any script runs (#42)
+
 ## [0.2.4] — 2026-09-27
 
 CI-hardening release: the monthly snapshot bot push went from silently
@@ -223,6 +267,7 @@ was superseded by the 0.2.0 bump before anything was ever published. No
 artifacts exist for this version; it is recorded here so the semver story
 stays honest.
 
+[0.2.5]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.5
 [0.2.4]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.4
 [0.2.3]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.3
 [0.2.2]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.2

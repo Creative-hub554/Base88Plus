@@ -61,14 +61,31 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # Only this job may write: the snapshot auto-commit. Everything else
-    # in the workflow stays read-only.
+    # in the workflow stays read-only. The preflight adds two READ scopes:
+    # administration (deploy keys + rulesets) and actions (secrets list).
     permissions:
       contents: write
+      administration: read
+      actions: read
     outputs:
       legs: ${{ steps.compute.outputs.legs }}
       canary: ${{ steps.compute.outputs.canary }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Deploy-key preflight: the monthly snapshot push rides on three
+      # legs (write-enabled deploy key, ruleset DeployKey bypass actor,
+      # DEPLOY_KEY_PEM secret) and rotating any one of them invalidates
+      # the others — the 2026-09-29 test-fire died exactly that way and
+      # only a manual test-fire noticed. This runs on EVERY run (PRs
+      # included) so a silent revocation goes red within days, not on
+      # cron day. Fork PRs carry a token that cannot audit administration
+      # endpoints; the script SKIPs (exit 0) rather than false-failing
+      # a check the PR cannot influence.
+      - name: Deploy-key preflight
+        run: node scripts/check-deploy-key.js
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # The ruleset's bypass actor is the repo's Deploy keys ROLE, so the
       # scheduled snapshot push authenticates as a deploy key and skips the

@@ -10,6 +10,20 @@ and CI goes green — see [CONTRIBUTING.md](CONTRIBUTING.md) for the release
 process. Download zips: the
 [Releases page](https://github.com/Creative-hub554/Base88Plus/releases/latest).
 
+## [Unreleased]
+
+### Added
+
+- **Deploy-key preflight in CI** — every CI run now audits the three legs
+  the monthly snapshot push rides on (a write-enabled deploy key, the
+  main-protection ruleset's DeployKey bypass actor, and the existence of
+  the `DEPLOY_KEY_PEM` secret) via `npm run check:deploy-key`
+  ([scripts/check-deploy-key.js](scripts/check-deploy-key.js)). A silent
+  revocation — which took down the Sep 29 test-fire of the cron path —
+  now turns CI red within days instead of surfacing only on cron day.
+  Fork PRs auto-SKIP (their token cannot read the administration
+  endpoints); offline `--self-test` fixtures cover the verdict matrix.
+
 ## [0.2.7] — 2026-09-29
 
 Fourth release of the day: the id-drift defect class gets closed at both

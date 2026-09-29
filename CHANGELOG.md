@@ -10,7 +10,10 @@ and CI goes green — see [CONTRIBUTING.md](CONTRIBUTING.md) for the release
 process. Download zips: the
 [Releases page](https://github.com/Creative-hub554/Base88Plus/releases/latest).
 
-## [Unreleased]
+## [0.3.1] - 2026-09-29
+
+Eighth release, second of the portability arc: an export now carries its
+identity back in, and a clobber hazard on foreign project.json is closed.
 
 ### Added
 

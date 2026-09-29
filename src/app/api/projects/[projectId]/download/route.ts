@@ -39,7 +39,12 @@ export async function GET(
     ),
   );
   for (const file of listAppFiles(projectId)) {
-    zip.file(file.path, file.content);
+    if (file.encoding === "base64") {
+      // Binary asset: zip the RAW bytes, not the base64 string layer.
+      zip.file(file.path, Buffer.from(file.content, "base64"), { binary: true });
+    } else {
+      zip.file(file.path, file.content);
+    }
   }
 
   const buffer = await zip.generateAsync({ type: "uint8array" });

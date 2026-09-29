@@ -152,9 +152,9 @@ describe("zip import — path sanitization (synthetic adversarial entries)", () 
 });
 
 describe("zip import — content filtering", () => {
-  it("skips binary content with the binary reason (extension, NUL, round-trip)", async () => {
+  it("imports binary assets as base64 files; still rejects binary TEXT content", async () => {
     const mod = await freshZipImport();
-    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
     const utf16 = new TextEncoder().encode("h\0i\0");
     const buf = await zipOf({
       "img/logo.png": png,
@@ -163,14 +163,24 @@ describe("zip import — content filtering", () => {
       "theme.css": "body{}",
     });
     const result = await mod.importProjectFromZip(buf);
-    expect(result.imported.map((f: { path: string }) => f.path)).toEqual([
-      "index.html",
-      "theme.css",
-    ]);
+    const byPath = new Map(
+      result.imported.map((f: { path: string; content: string; encoding?: string }) => [
+        f.path,
+        f,
+      ]),
+    );
+    // The PNG is a first-class binary asset now: imported with the base64
+    // string layer, byte-exact.
+    const pngFile = byPath.get("img/logo.png") as { content: string; encoding?: string };
+    expect(pngFile.encoding).toBe("base64");
+    expect(Buffer.from(pngFile.content, "base64")).toEqual(Buffer.from(png));
+    expect(byPath.get("index.html")).toBeTruthy();
+    expect(byPath.get("theme.css")).toBeTruthy();
+    // UTF-16 text (binary CONTENT in a text-extension path) is still
+    // rejected — it would corrupt as utf8.
     const reasons = new Map(
       result.skipped.map((s: { path: string; reason: string }) => [s.path, s.reason]),
     );
-    expect(reasons.get("img/logo.png")).toBe(mod.SKIP_REASONS.BINARY);
     expect(reasons.get("text.txt")).toBe(mod.SKIP_REASONS.BINARY);
   });
 
@@ -366,6 +376,82 @@ describe("zip import — store semantics", () => {
     }
     // The envelope never leaks into the workspace listing.
     expect(await store_listPaths(result.project.id)).not.toContain("project.json");
+  });
+
+  it("binary assets round-trip BYTE-EXACT through export → import (fonts and images)", async () => {
+    const store = await import("../src/lib/store");
+    const { GET } = await import("../src/app/api/projects/[projectId]/download/route");
+    const mod = await freshZipImport();
+
+    // A "font" with bytes that would corrupt under any utf8 round-trip
+    // (high bytes, BOM-ish prefixes, NULs) and a small PNG.
+    const woff2 = Buffer.from([
+      0x77, 0x4f, 0x46, 0x32, 0xff, 0xfe, 0x00, 0x42, 0x7e, 0x11, 0xc3, 0xa9,
+    ]);
+    const png = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+    ]);
+    const p = store.createProject("Asset RT", "");
+    store.saveAppFile(p.id, "index.html", '<html><link rel="stylesheet" href="font.css"></html>');
+    store.saveAppFile(p.id, "font.css", "@font-face { src: url('Inter.woff2'); }");
+    store.saveAppFile(p.id, "Inter.woff2", woff2.toString("base64"), "base64");
+    store.saveAppFile(p.id, "logo.png", png.toString("base64"), "base64");
+
+    const res = await GET(
+      new Request(`http://localhost:3000/api/projects/${p.id}/download`) as never,
+      { params: Promise.resolve({ projectId: p.id }) } as never,
+    );
+    const exported = Buffer.from(await res.arrayBuffer());
+    const result = await mod.importProjectFromZip(exported);
+
+    // 4 imported (envelope consumed), nothing skipped.
+    expect(result.skipped).toEqual([]);
+    expect(result.imported).toHaveLength(4);
+    const byPath = new Map(
+      result.imported.map((f: { path: string; content: string; encoding?: string }) => [f.path, f]),
+    );
+    expect(byPath.get("Inter.woff2")?.encoding).toBe("base64");
+    expect(byPath.get("logo.png")?.encoding).toBe("base64");
+    // BYTE-EXACT: the whole point of the feature.
+    expect(Buffer.from(byPath.get("Inter.woff2")!.content, "base64")).toEqual(woff2);
+    expect(Buffer.from(byPath.get("logo.png")!.content, "base64")).toEqual(png);
+    // The store serves the same base64 back and the disk kernel wrote real bytes.
+    expect(store.isBinaryPath("Inter.woff2")).toBe(true);
+    expect(store.readAppFile(result.project.id, "Inter.woff2")).toBe(
+      woff2.toString("base64"),
+    );
+  });
+
+  it("store kernels: binary files write raw bytes, list as base64, and serve via fileBytes", async () => {
+    const store = await import("../src/lib/store");
+    const raw = Buffer.from([0x00, 0x01, 0xff, 0xfe, 0x80, 0x7f]);
+    const p = store.createProject("Kernels", "");
+
+    // Auto-detect by extension on plain save (base64 string layer).
+    store.saveAppFile(p.id, "img/x.png", raw.toString("base64"));
+    const listed = store.listAppFiles(p.id);
+    expect(listed).toHaveLength(1);
+    expect(listed[0].encoding).toBe("base64");
+    expect(listed[0].content).toBe(raw.toString("base64"));
+    // fileBytes decodes to the ORIGINAL bytes (the serving/zip contract).
+    expect(store.fileBytes(listed[0])).toEqual(raw);
+    // Disk truth: the file on disk is the raw bytes, not the base64 text.
+    expect(fs.readFileSync(path.join(process.cwd(), "projects-data", p.id, "img", "x.png")))
+      .toEqual(raw);
+    // readAppFile returns the base64 layer back.
+    expect(store.readAppFile(p.id, "img/x.png")).toBe(raw.toString("base64"));
+
+    // Text files are unaffected.
+    store.saveAppFile(p.id, "a.txt", "héllo");
+    const t = store.listAppFiles(p.id).find((f: { path: string }) => f.path === "a.txt");
+    expect(t?.encoding).toBeUndefined();
+    expect(t?.content).toBe("héllo");
+
+    // writeProjectFile honors an explicit encoding over extension heuristics.
+    store.writeProjectFile(p.id, { path: "weird.bin", content: "YWJj", encoding: "base64" });
+    expect(
+      fs.readFileSync(path.join(process.cwd(), "projects-data", p.id, "weird.bin")),
+    ).toEqual(Buffer.from("abc"));
   });
 
   it("export writes the envelope; nested app project.json files stay ordinary files", async () => {

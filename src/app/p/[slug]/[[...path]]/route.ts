@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { contentTypeFor } from "@/lib/content-types";
 import {
   findPublishedProject,
+  isBinaryPath,
   readPublishedFile,
 } from "@/lib/store";
 
@@ -39,5 +40,9 @@ export async function GET(
   // can't reach cookies/storage of anything else on this origin.
   headers["Content-Security-Policy"] =
     "sandbox allow-scripts allow-forms allow-modals allow-popups";
-  return new Response(content, { headers });
+  // Binary assets ride the string layer as base64 — emit raw bytes.
+  const body: BodyInit = isBinaryPath(filePath)
+    ? Buffer.from(content, "base64")
+    : content;
+  return new Response(body, { headers });
 }

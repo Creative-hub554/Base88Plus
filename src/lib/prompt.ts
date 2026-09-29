@@ -244,7 +244,12 @@ export function buildWorkspaceContext(files: ProjectFile[]): string {
   const MAX_TOTAL_CHARS = 60_000;
   let budget = MAX_TOTAL_CHARS;
   const fileBlocks: string[] = [];
+  // Binary assets (images/fonts, base64 string layer) must NEVER be
+  // inlined into the prompt — they are noise to the model and would eat
+  // the entire context budget. They are listed by name instead.
+  const binary = files.filter((f) => f.encoding === "base64");
   for (const f of files) {
+    if (f.encoding === "base64") continue;
     if (budget <= 0) break;
     const content =
       f.content.length > MAX_FILE_CHARS
@@ -254,9 +259,19 @@ export function buildWorkspaceContext(files: ProjectFile[]): string {
     budget -= block.length;
     if (budget > 0) fileBlocks.push(block);
   }
-  return `\n\n## Current project files\n\nThese are the project's current files. When editing, keep IDs, class names and\nfunction names consistent with these actual contents:\n\n${fileBlocks.join("\n\n")}`;
+  const binaryNote = binary.length
+    ? `\n\nBinary assets already in the project (referenced by relative path when needed; never recreate their contents): ${binary
+        .map((f) => f.path)
+        .join(", ")}.`
+    : "";
+  return `\n\n## Current project files\n\nThese are the project's current files. When editing, keep IDs, class names and\nfunction names consistent with these actual contents:\n\n${fileBlocks.join("\n\n")}${binaryNote}`;
 }
 
 export function relativePathList(files: ProjectFile[]): string {
-  return files.map((f) => `- ${f.path} (${f.content.length} bytes)`).join("\n");
+  return files
+    .map(
+      (f) =>
+        `- ${f.path} (${f.content.length} bytes${f.encoding === "base64" ? ", binary" : ""})`,
+    )
+    .join("\n");
 }

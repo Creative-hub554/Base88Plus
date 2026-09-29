@@ -28,7 +28,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import JSZip from "jszip";
-import { createProject, saveAppFile } from "./store";
+import { BINARY_EXTENSIONS, createProject, saveAppFile } from "./store";
 import type { Project, ProjectFile } from "./types";
 
 /** Key of the metadata envelope inside an anybase export zip. */
@@ -70,6 +70,17 @@ export const IMPORT_MAX_FILE_BYTES = 1_000_000;
 /** Total bytes accepted across all entries. */
 export const IMPORT_MAX_TOTAL_BYTES = 20_000_000;
 
+/**
+ * Binary assets (images/fonts/media) are now IMPORTED as first-class
+ * files — their string layer carries base64 (`encoding: "base64"`) and
+ * the store's disk kernel writes raw bytes. Extension set comes from the
+ * store's single source of truth.
+ */
+function isImportableBinaryPath(cleanPath: string): boolean {
+  const ext = cleanPath.split(".").pop()?.toLowerCase() ?? "";
+  return (BINARY_EXTENSIONS as readonly string[]).includes(ext);
+}
+
 const MACOS_DIR_RE = /(^|\/)__MACOSX(\/|$)/;
 const DOT_OR_SYSTEM_RE = /(^|\/)(\.[^/]*|Thumbs\.db|desktop\.ini)$/;
 
@@ -89,8 +100,8 @@ export interface ZipEntryLike {
   name: string;
   /** Declared uncompressed size; undefined when unknown (data descriptor). */
   size?: number;
-  /** Entry payload. */
-  async: (type: "string") => Promise<string>;
+  /** Entry payload — base64 for binary assets, string for text. */
+  async: (type: "string" | "base64") => Promise<string>;
 }
 
 /**
@@ -258,8 +269,23 @@ export async function importFromEntries(
     }
     seen.add(dupeKey);
 
-    if (BINARY_EXT_RE.test(cleanPath)) {
-      skipped.push({ path: cleanPath, reason: SKIP_REASONS.BINARY });
+    // Binary assets (images/fonts/media) are first-class now: read RAW
+    // bytes, size-check, store with the base64 string layer.
+    if (isImportableBinaryPath(cleanPath)) {
+      const raw = await file.async("base64");
+      if (raw.length === 0) {
+        skipped.push({ path: cleanPath, reason: SKIP_REASONS.EMPTY });
+        continue;
+      }
+      const byteLength = Buffer.from(raw, "base64").length;
+      if (byteLength > maxFileBytes || totalBytes + byteLength > maxTotalBytes) {
+        skipped.push({ path: cleanPath, reason: SKIP_REASONS.TOO_LARGE });
+        continue;
+      }
+      saveAppFile(project.id, cleanPath, raw, "base64");
+      imported.push({ path: cleanPath, content: raw, encoding: "base64" });
+      totalBytes += byteLength;
+      acceptedAny = true;
       continue;
     }
 

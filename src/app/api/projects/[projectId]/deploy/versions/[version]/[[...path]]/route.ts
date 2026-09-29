@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { contentTypeFor } from "@/lib/content-types";
-import { getDeployVersion, readDeployVersionFile } from "@/lib/store";
+import { getDeployVersion, readDeployVersionFile, isBinaryPath } from "@/lib/store";
 
 /**
  * Serve a file from a stored deploy version so past versions can be
@@ -29,7 +29,11 @@ export async function GET(
   const content = readDeployVersionFile(projectId, v, filePath);
   if (content === null) return new Response("Not found", { status: 404 });
 
-  return new Response(content, {
+  // Binary assets ride the string layer as base64 — emit raw bytes.
+  const body: BodyInit = isBinaryPath(filePath)
+    ? Buffer.from(content, "base64")
+    : content;
+  return new Response(body, {
     headers: {
       "Content-Type": contentTypeFor(filePath),
       "Cache-Control": "no-store",

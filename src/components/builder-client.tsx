@@ -9,6 +9,8 @@ import { choose, notify, ToastHost } from "./toast";
 interface WorkspaceFile {
   path: string;
   content: string;
+  /** Set when the file is a binary asset (base64 string layer). */
+  encoding?: "base64";
 }
 
 /** Devices shown side by side in the multi-device preview (null = fluid). */
@@ -1233,9 +1235,16 @@ export function BuilderClient({
                   </div>
                 ) : (
                   <MissingRefCodeView
-                    content={
-                      files.find((f) => f.path === activeFile)?.content ?? ""
-                    }
+                    content={(() => {
+                      const f = files.find((x) => x.path === activeFile);
+                      if (!f) return "";
+                      // Binary assets ride the string layer as base64;
+                      // the editor shows a summary instead of the wall.
+                      if (f.encoding === "base64") {
+                        return `[Binary asset · ${Math.round((f.content.length * 3) / 4).toLocaleString()} bytes] — rendered by the preview. Replace it by importing a new zip or regenerating the asset.`;
+                      }
+                      return f.content;
+                    })()}
                     missingLines={missingRefs
                       .filter((r) => r.from === activeFile)
                       .map((r) => r.line)}

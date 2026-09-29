@@ -97,10 +97,14 @@ export async function deployToCloudflare(
   }
 
   // Phase 1: register the manifest. Hash must match what phase 2 uploads
-  // (hash of base64 content); size is byte length.
+  // (hash of base64 content); size is byte length. Binary assets carry
+  // encoding: "base64" — their string layer IS base64 already.
   const manifest: Record<string, { hash: string; size: number }> = {};
   for (const f of files) {
-    const bytes = Buffer.from(f.content, "utf8");
+    const bytes =
+      f.encoding === "base64"
+        ? Buffer.from(f.content, "base64")
+        : Buffer.from(f.content, "utf8");
     manifest[`/${f.path}`] = {
       hash: createHash("sha256")
         .update(bytes.toString("base64"))
@@ -123,7 +127,10 @@ export async function deployToCloudflare(
   // lists files the account has never seen — dedup is built into the API.
   const form = new FormData();
   for (const f of files) {
-    const b64 = Buffer.from(f.content, "utf8").toString("base64");
+    const b64 =
+      f.encoding === "base64"
+        ? f.content
+        : Buffer.from(f.content, "utf8").toString("base64");
     form.append(
       f.path,
       new Blob([b64], { type: contentTypeForDeploy(f.path) }),

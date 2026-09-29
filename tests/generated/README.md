@@ -20,6 +20,17 @@ CI here, which is the point.
 
 ## Adding a pin
 
+The fast path (resolves the project, validates the assertions up front,
+copies both files, and runs the full pin set — rolling the new pin back if
+anything fails):
+
+```bash
+npm run new:pin -- projects-data/<id> <assertions.cjs>
+npm run new:pin -- projects-data/<id> <assertions.cjs> --name my-name --force
+```
+
+Manual equivalent:
+
 1. Generate the app (or pick an existing one) and verify it with the harness:
    `npm run verify:app -- projects-data/<id> <assertions.cjs>`
 2. `mkdir tests/generated/<app-name>` and copy the workspace `app.js` in

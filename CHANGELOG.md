@@ -10,6 +10,33 @@ and CI goes green — see [CONTRIBUTING.md](CONTRIBUTING.md) for the release
 process. Download zips: the
 [Releases page](https://github.com/Creative-hub554/Base88Plus/releases/latest).
 
+## [0.2.7] — 2026-09-29
+
+Fourth release of the day: the id-drift defect class gets closed at both
+ends — the builder can no longer quietly query ids that don't exist, and CI
+can no longer quietly accept a pin that does. No application behavior
+changes.
+
+### Added
+
+- **Builder prompt: never query nonexistent ids** — a new rule in the
+  "Interactive apps: state and timers" section requires cross-checking every
+  id/class queried in `app.js` against the HTML shipped in the same reply.
+  One wrong id throws on load and kills the app — three of three audited
+  generated apps had at least one such defect (#51)
+- **Strict-selector mode in the generated-app verifier** —
+  `verify:generated -- --strict` (now the CI default) fails any pin whose
+  app queries `#id`/`.class` selectors its assertions never seeded, with
+  named `STRICT` warnings; previously the auto-creating stubs silently
+  satisfied such queries, hiding load-time crashes (#51)
+
+### Changed
+
+- **Pomodoro pin suite aligned with its app** — the suite now seeds exactly
+  the selectors `app.js` queries, so the pin passes strict mode with zero
+  warnings; the strict sweep over all pins is what surfaced the mismatch
+  (#51)
+
 ## [0.2.6] — 2026-09-29
 
 Third release of the day: the generated-app quality loop gets a clear-before-
@@ -298,6 +325,7 @@ was superseded by the 0.2.0 bump before anything was ever published. No
 artifacts exist for this version; it is recorded here so the semver story
 stays honest.
 
+[0.2.7]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.7
 [0.2.6]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.6
 [0.2.5]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.5
 [0.2.4]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.4

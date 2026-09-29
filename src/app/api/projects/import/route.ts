@@ -28,6 +28,8 @@ export async function POST(req: NextRequest) {
   }
   const name = (form.get("name") as string | null) ?? undefined;
   const description = (form.get("description") as string | null) ?? undefined;
+  const fallbackName =
+    (form.get("nameFromFilename") as string | null) ?? undefined;
 
   const buf = Buffer.from(await file.arrayBuffer());
   // Zip magic: PK\x03\x04 (tolerate empty PK\x05\x06 and spanned PK\x07\x08).
@@ -45,7 +47,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const result = await importProjectFromZip(buf, { name, description });
+    const result = await importProjectFromZip(buf, { name, description, fallbackName });
     return Response.json(
       {
         project: result.project,

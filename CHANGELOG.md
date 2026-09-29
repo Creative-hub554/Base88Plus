@@ -10,6 +10,25 @@ and CI goes green — see [CONTRIBUTING.md](CONTRIBUTING.md) for the release
 process. Download zips: the
 [Releases page](https://github.com/Creative-hub554/Base88Plus/releases/latest).
 
+## [Unreleased]
+
+### Added
+
+- Metadata-aware imports: exports now embed the project record (anybase
+  marker + name/description) as the zip's root project.json, and importing
+  an Anybase export restores the app's original name and description. The
+  uploaded filename is only a fallback hint for foreign zips — explicit
+  name overrides still win, and the envelope's old id/timestamps never
+  leak into the fresh project.
+
+### Fixed
+
+- A foreign zip's root project.json is no longer silently dropped: it is
+  skipped with an explicit "reserved by Anybase" reason (case-insensitive,
+  since writing PROJECT.JSON would clobber the project record on Windows).
+  Nested project.json files remain ordinary files — though the store
+  excludes that basename from workspace listings at any depth.
+
 ## [0.3.0] - 2026-09-29
 
 Seventh release and the first feature drop of the portability arc:

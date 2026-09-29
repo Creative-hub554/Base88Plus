@@ -10,13 +10,17 @@ and CI goes green — see [CONTRIBUTING.md](CONTRIBUTING.md) for the release
 process. Download zips: the
 [Releases page](https://github.com/Creative-hub554/Base88Plus/releases/latest).
 
-## [Unreleased]
+## [0.2.9] — 2026-09-29
+
+Sixth release of the day: promotion day gets the same autonomous treatment
+as Oct 3, and a rehearsal of the verifier's never-taken path caught a dead
+alarm before it could matter. No application behavior changes.
 
 ### Added
 
 - **Oct 28 promotion-day verifier workflow** — `oct28-verify.yml` runs
   `scripts/verify-oct28.ps1` for real on promotion day (four Oct-28-only
-  crons: 07:23 / 09:33 / 13:33 / 19:17 UTC) and posts the verdict on issue
+  crons: 07:23 / 09:33 / 13:33 / 19:33 UTC) and posts the verdict on issue
   #18. Firing the promotion dispatch and closing #18 stay deliberate
   operator acts (`NO_DISPATCH_RUN` is exit 0 by design; `CLOSE=1` is never
   set by the workflow). The date-aware smoke mode expects
@@ -25,6 +29,16 @@ process. Download zips: the
 - **One-command promotion-day check** — `npm run check:oct28` answers
   CONFIRMED_PASS / ATTENTION / NOT_YET from the scheduled runs and the #18
   verdicts, routing `NO_DISPATCH_RUN` to the exact dispatch curl (#58)
+
+### Fixed
+
+- **Oct 28 provenance alarm could never fire** — `ConvertFrom-Json` yields
+  `_fetchedAt` as a String, and PowerShell's `string -lt [datetime]`
+  coerces the datetime to a string, so `2026-09-xx` compared *greater* than
+  `2026-10-03` lexicographically (`'9' > '1'`); the "Oct 3 refresh never
+  landed" tripwire was dead code. Both sides now cast to `[datetime]`, the
+  alarm is date-guarded to on/after Oct 3, and a new `VERIFY_GNOMON` env
+  makes the date-dependent branches deterministically rehearsable (#59)
 
 ## [0.2.8] — 2026-09-29
 
@@ -386,6 +400,7 @@ was superseded by the 0.2.0 bump before anything was ever published. No
 artifacts exist for this version; it is recorded here so the semver story
 stays honest.
 
+[0.2.9]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.9
 [0.2.8]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.8
 [0.2.7]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.7
 [0.2.6]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.6

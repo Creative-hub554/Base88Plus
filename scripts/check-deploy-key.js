@@ -284,7 +284,16 @@ async function main() {
 
   const data = await gather(repo, token);
   if (data.repoError) {
+    // Repo meta unreadable: 404 = wrong/no repo access (fork context), 401 =
+    // dead/under-scoped token. Same verdict logic as classify(): a same-repo
+    // run (--require-audit) must go RED here — a silently-unaudited preflight
+    // is the exact failure mode this check exists to prevent.
     console.log(`RESULT deploy-key-preflight SKIP repo=${repo} (repo meta HTTP ${data.repoError})`);
+    if (requireAudit) {
+      console.log('✗ --require-audit: the audit credential could not even read repo metadata (dead/expired/under-scoped PREFLIGHT_TOKEN?)');
+      console.log('RESULT deploy-key-preflight FAIL');
+      process.exit(1);
+    }
     process.exit(0);
   }
   const result = classify(data);

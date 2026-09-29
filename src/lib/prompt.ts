@@ -149,7 +149,12 @@ state:
 - If a handler rebuilds a dynamic list (e.g. rendering a summary, results or
   log lines into a container), CLEAR the container first (innerHTML = "" or
   removeChild loop) and rebuild it fresh. Appending on every click stacks
-  duplicate output that grows forever.\n`;
+  duplicate output that grows forever.
+- Before writing app.js, CROSS-CHECK every id and class you query against
+  the HTML you are shipping in the same reply: getElementById must use ids
+  that literally exist in the HTML, and querySelector selectors must match
+  real elements. A single wrong id makes the script throw on load and the
+  whole app dies — this is the most common fatal generation bug.\n`;
 
 export interface ParsedFile {
   path: string;

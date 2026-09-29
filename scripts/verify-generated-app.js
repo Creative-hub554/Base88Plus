@@ -10,9 +10,14 @@
  * textContent/classList/hidden.
  *
  * Usage:
- *   node scripts/verify-generated-app.js <app.js-or-project-dir> <assertions.cjs>
- *   node scripts/verify-generated-app.js --all
+ *   node scripts/verify-generated-app.js <app.js-or-project-dir> <assertions.cjs> [--strict]
+ *   node scripts/verify-generated-app.js --all [--strict]
  *   npm run verify:app -- --all
+ *
+ * --strict (or VERIFY_STRICT_SELECTORS=1): '#id'/'.class' queries made by
+ * APP CODE that setup() never seeded are reported as STRICT_SELECTOR_WARNINGS
+ * and FAIL the suite — that pattern is id-drift (the app querying elements
+ * its own HTML doesn't define), invisible to a real-DOM-less stub otherwise.
  *
  * The `--all` mode runs every pin under tests/generated/<app>/ (a pinned
  * app.js + an assertions.cjs). Pins are REGRESSION SNAPSHOTs: copy a
@@ -124,6 +129,20 @@ function makeEl(name) {
       const ev = event || { type, target: this, preventDefault() {}, stopPropagation() {} };
       if (handlers[type]) handlers[type](ev);
     },
+    // Element-scoped queries: auto-stubbed per (element, selector) — real
+    // selector matching needs a DOM tree we don't have, so suites seed the
+    // returned stub's properties (value/checked/textContent) in setup.
+    querySelector(sel) {
+      this.__scoped = this.__scoped || new Map();
+      if (!this.__scoped.has(sel)) this.__scoped.set(sel, makeEl(`${name} > ${sel}`));
+      return this.__scoped.get(sel);
+    },
+    querySelectorAll(sel) {
+      this.__scoped = this.__scoped || new Map();
+      const key = sel + '[]';
+      if (!this.__scoped.has(key)) this.__scoped.set(key, []);
+      return this.__scoped.get(key);
+    },
     getAttribute(n) {
       return Object.prototype.hasOwnProperty.call(this.attributes, n) ? this.attributes[n] : null;
     },
@@ -136,26 +155,43 @@ function makeEl(name) {
   };
 }
 
-function createHarness() {
+function createHarness(opts = {}) {
   const bySelector = new Map();
   const lists = new Map();
   const intervals = new Map();
   const docListeners = {};
   const winListeners = {};
+  // Strict-selector mode: '#id' / '.class' lookups that setup() never seeded
+  // are the id-drift signature (the generated app querying an element its
+  // own HTML doesn't define — fatal in a real browser, silent here).
+  // NOTES: (1) only queries ORIGINATING IN APP CODE count — the harness's
+  // own el() calls (synthetic event targets, etc.) and suite seeding via
+  // h.el()/h.elAll() are exempt; (2) a selector is warned about once, when
+  // the app's first query creates it.
+  const strict = opts.strict === true || process.env.VERIFY_STRICT_SELECTORS === '1';
+  const warnings = [];
   let nextId = 1;
   let passCount = 0;
   let failCount = 0;
 
   // '#x' selectors and getElementById('x') share one element instance.
-  const el = (sel) => {
+  const el = (sel, fromApp) => {
     const key = sel.startsWith('#') ? 'id:' + sel.slice(1) : sel;
-    if (!bySelector.has(key)) bySelector.set(key, makeEl(sel));
+    if (!bySelector.has(key)) {
+      if (strict && fromApp) {
+        warnings.push(sel);
+        console.log(`  STRICT ${sel} — queried by the app but never seeded in setup()`);
+      }
+      bySelector.set(key, makeEl(sel));
+    }
     return bySelector.get(key);
   };
 
   const sandbox = {
     document: {
-      querySelector: (s) => el(s),
+      // fromApp=true: document queries are APP code, so in strict mode an
+      // unseeded selector here is recorded as id-drift.
+      querySelector: (s) => el(s, true),
       querySelectorAll: (s) => {
         if (!lists.has(s)) {
           throw new Error(
@@ -164,7 +200,7 @@ function createHarness() {
         }
         return lists.get(s);
       },
-      getElementById: (id) => el('#' + id),
+      getElementById: (id) => el('#' + id, true),
       get body() { return el('body'); },
       addEventListener: (t, fn) => { (docListeners[t] = docListeners[t] || []).push(fn); },
       createElement: (tag) => makeEl(tag),
@@ -222,6 +258,7 @@ function createHarness() {
       for (const fn of winListeners[type] || []) fn(ev);
     },
     pendingIntervals: () => intervals.size,
+    strictWarnings: () => [...warnings],
     check(label, cond) {
       if (cond) { passCount++; console.log('  PASS', label); }
       else { failCount++; console.log('  FAIL', label); }
@@ -241,10 +278,12 @@ function resolveAppPath(appArg) {
 /**
  * Runs one suite. Returns { pass, fail, crashed } and prints the per-suite
  * RESULT line. Never exits — the caller decides, so --all can tally.
+ * strict: flag unseeded '#id'/'.class' queries made BY APP CODE as id-drift
+ * (VERIFY_STRICT_SELECTORS=1 turns it on for every suite).
  */
-function runSuite(label, appPath, assertsPath) {
+function runSuite(label, appPath, assertsPath, opts = {}) {
   console.log(`\nsuite ${label}`);
-  const h = createHarness();
+  const h = createHarness(opts);
   let mod;
   try {
     mod = require(path.resolve(assertsPath));
@@ -270,8 +309,15 @@ function runSuite(label, appPath, assertsPath) {
     console.error(`APP_ERROR ${e && e.message ? e.message : e}`);
     return { pass: h.pass, fail: h.fail + 1, crashed: true };
   }
-  console.log(`RESULT ${h.fail === 0 ? 'LOGIC_PASS' : 'LOGIC_FAIL'} pass=${h.pass} fail=${h.fail}`);
-  return { pass: h.pass, fail: h.fail, crashed: false };
+  const strictHits = h.strictWarnings();
+  if (strictHits.length) {
+    console.log(`STRICT_SELECTOR_WARNINGS ${strictHits.join(', ')}`);
+  }
+  // Strict mode: id-drift is a failure even when behavior assertions pass —
+  // the stub silently satisfied a query the real DOM would answer with null.
+  const failed = h.fail > 0 || (opts.strict && strictHits.length > 0);
+  console.log(`RESULT ${failed ? 'LOGIC_FAIL' : 'LOGIC_PASS'} pass=${h.pass} fail=${h.fail}${strictHits.length ? ` strict=${strictHits.length}` : ''}`);
+  return { pass: h.pass, fail: failed ? h.fail + 1 : h.fail, crashed: false };
 }
 
 function discoverPins() {
@@ -290,6 +336,8 @@ function discoverPins() {
 function main() {
   const argv = process.argv.slice(2);
 
+  const flagStrict = argv.includes('--strict') || process.env.VERIFY_STRICT_SELECTORS === '1';
+
   if (argv.includes('--all')) {
     const pins = discoverPins();
     if (pins.length === 0) {
@@ -300,7 +348,7 @@ function main() {
     let fail = 0;
     let crashed = 0;
     for (const pin of pins) {
-      const r = runSuite(pin.name, pin.app, pin.asserts);
+      const r = runSuite(pin.name, pin.app, pin.asserts, { strict: flagStrict });
       pass += r.pass;
       fail += r.fail;
       if (r.crashed) crashed++;
@@ -320,7 +368,7 @@ function main() {
     console.error(`APP_NOT_FOUND ${appArg}`);
     process.exit(1);
   }
-  const r = runSuite(path.basename(appPath), appPath, assertsArg);
+  const r = runSuite(path.basename(appPath), appPath, assertsArg, { strict: flagStrict });
   process.exit(r.fail === 0 ? 0 : 1);
 }
 

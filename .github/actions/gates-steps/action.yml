@@ -35,7 +35,9 @@ runs:
     # Regression-pinned generated apps (tests/generated/<app>/): runs every
     # pin headlessly via the vm harness. Exit 0 when zero pins exist, so
     # removing all pins never breaks CI. Never skip silently: a pin that
-    # fails = a regeneration changed pinned behavior.
+    # fails = a regeneration changed pinned behavior. --strict fails any pin
+    # whose app queries '#id'/'.class' selectors the suite never seeded
+    # (id-drift: fatal in a real browser, invisible to plain stubs).
     - name: Generated-app regression pins
       shell: bash
-      run: npm run verify:generated
+      run: npm run verify:generated -- --strict

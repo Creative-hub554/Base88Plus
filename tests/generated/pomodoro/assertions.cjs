@@ -14,8 +14,19 @@
 
 module.exports = {
   // Registered BEFORE the app loads: querySelectorAll lists are never auto-made.
+  // Seeds exactly what app.js queries (the selectors strict mode expects):
+  // .container/.timer-title/.time/.start/.pause/.reset/.break-start via
+  // querySelector, #completed via getElementById, and the dot list.
   setup(h) {
     h.elAll('.progress-indicators .dot', 4);
+    h.el('.container');
+    h.el('.timer-title');
+    h.el('.time');
+    h.el('#completed');
+    h.el('.start');
+    h.el('.pause');
+    h.el('.reset');
+    h.el('.break-start');
   },
 
   run(h) {

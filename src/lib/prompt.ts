@@ -145,7 +145,11 @@ state:
   an action handler before applying the real one.
 - Phase changes (e.g. work -> break -> work) happen where the timer expires,
   inside the tick handler, so every phase is visibly entered and exited;
-  update counters/credits at the same place.\n`;
+  update counters/credits at the same place.
+- If a handler rebuilds a dynamic list (e.g. rendering a summary, results or
+  log lines into a container), CLEAR the container first (innerHTML = "" or
+  removeChild loop) and rebuild it fresh. Appending on every click stacks
+  duplicate output that grows forever.\n`;
 
 export interface ParsedFile {
   path: string;

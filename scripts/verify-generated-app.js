@@ -79,6 +79,13 @@ function makeEl(name) {
   return {
     name,
     textContent: '',
+    // innerHTML assignment models the clear-and-rebuild pattern: setting it
+    // wipes children (and text), so suites can assert refresh-not-append.
+    get innerHTML() { return this.textContent; },
+    set innerHTML(v) {
+      this.textContent = String(v);
+      this.children.length = 0;
+    },
     hidden: false,
     value: '',
     attributes: {},
@@ -95,12 +102,20 @@ function makeEl(name) {
     },
     addEventListener: (t, fn) => { handlers[t] = fn; },
     removeEventListener: (t) => { delete handlers[t]; },
-    click: () => { if (handlers.click) handlers.click(); },
+    click(event) {
+      if (handlers.click) {
+        handlers.click(event || { type: 'click', preventDefault() {}, stopPropagation() {} });
+      }
+    },
     getAttribute(n) {
       return Object.prototype.hasOwnProperty.call(this.attributes, n) ? this.attributes[n] : null;
     },
     setAttribute(n, v) { this.attributes[n] = String(v); },
     appendChild(c) { this.children.push(c); return c; },
+    // Constraint-validation stub: generated forms commonly gate Next on
+    // checkValidity(); default valid, suites can override per-element.
+    checkValidity: () => true,
+    reportValidity: () => true,
   };
 }
 
@@ -140,6 +155,17 @@ function createHarness() {
     window: { addEventListener: (t, fn) => { (winListeners[t] = winListeners[t] || []).push(fn); } },
     localStorage: makeStorage(),
     sessionStorage: makeStorage(),
+    // Constraint-validation era: generated forms commonly do
+    // Object.fromEntries(new FormData(form)). Reads form.elements (seed the
+    // array in setup) pairing each entry's id/name with its value.
+    FormData: class {
+      constructor(form) {
+        this.pairs = (form && form.elements ? form.elements : []).map(
+          (e) => [e.id || e.name || 'field', e.value]
+        );
+      }
+      [Symbol.iterator]() { return this.pairs[Symbol.iterator](); }
+    },
     console,
     setInterval: (fn) => {
       const id = nextId++;
@@ -167,12 +193,16 @@ function createHarness() {
       }
     },
     // Fire document/window listeners (DOMContentLoaded, keydown, …) that the
-    // app registered while loading — with a minimal synthetic event object.
+    // app registered while loading — with a minimal synthetic event object
+    // (preventDefault/stopPropagation no-ops, since generated handlers call
+    // them freely).
     fireDocument(type, event) {
-      for (const fn of docListeners[type] || []) fn(event || { type, target: el('body') });
+      const ev = event || { type, target: el('body'), preventDefault() {}, stopPropagation() {} };
+      for (const fn of docListeners[type] || []) fn(ev);
     },
     fireWindow(type, event) {
-      for (const fn of winListeners[type] || []) fn(event || { type });
+      const ev = event || { type, preventDefault() {}, stopPropagation() {} };
+      for (const fn of winListeners[type] || []) fn(ev);
     },
     pendingIntervals: () => intervals.size,
     check(label, cond) {

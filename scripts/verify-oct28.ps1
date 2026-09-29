@@ -7,6 +7,7 @@ Usage:  powershell -NoProfile -ExecutionPolicy Bypass -File .freebuff/verify-oct
 Env:    VERIFY_TOKEN=<tok>  token override (CI drill / non-Windows); default is the
                         Windows Credential Manager entry gh:github.com:Creative-hub554
         VERIFY_FORCE=1           bypass the date gate (plumbing tests only)
+        VERIFY_GNOMON=yyyy-MM-dd fake today (deterministic rehearsal of date gates)
         DRY_RUN=1                print the #18 comment instead of posting/closing
         CLOSE=1                  ALLOW closing #18 (real run + comment posted + PASS)
         SMOKE_RUN_ID=<id>        inspect a specific pre-Oct-28 dispatch run instead of
@@ -48,7 +49,9 @@ $h = @{ Authorization = "Bearer $tok"; Accept = 'application/vnd.github+json'; '
 $base = 'https://api.github.com/repos/Creative-hub554/Base88Plus'
 
 # --- 1. date gate: promotion day is 2026-10-28 ---
-$today = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
+# VERIFY_GNOMON=yyyy-MM-dd fakes today for deterministic rehearsal of the
+# date-dependent branches (date gate, provenance alarm) without waiting.
+$today = if ($env:VERIFY_GNOMON) { $env:VERIFY_GNOMON } else { (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd') }
 if ($today -lt '2026-10-28' -and $env:VERIFY_FORCE -ne '1') {
   Write-Output "REFUSED_DATE_GATE today=$today promotion day is 2026-10-28 (VERIFY_FORCE=1 overrides for plumbing tests)"; exit 2
 }
@@ -100,7 +103,13 @@ if ($run) {
   $wrapper = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($sn.content)) | ConvertFrom-Json
   $age = [int](((Get-Date).ToUniversalTime() - [datetime]$wrapper._fetchedAt).TotalDays)
   $cronNote = 'OK (refreshed by the Oct 3 cron push)'
-  if ($wrapper._fetchedAt -lt [datetime]'2026-10-03') {
+  # Cast the LEFT side: ConvertFrom-Json yields _fetchedAt as a String, and a
+  # string -lt [datetime] coerces the datetime to a string, so '2026-09-xx'
+  # compares GREATER than '2026-10-03' lexicographically ('9' > '1') and the
+  # STALE PROVENANCE alarm could never fire. Rehearsed 2026-09-29.
+  # Date-guarded: BEFORE Oct 3 the snapshot legitimately predates the cron,
+  # so the alarm applies only on/after cron day ($today is ISO, string-safe).
+  if ($today -ge '2026-10-03' -and [datetime]$wrapper._fetchedAt -lt [datetime]'2026-10-03') {
     $cronNote = 'STALE PROVENANCE - snapshot predates the Oct 3 cron; the Oct 3 refresh never landed (see the post-Oct-3 verifier / runbook step 3)'
   } elseif ($age -gt 25) {
     $cronNote = "WARNING - snapshot is $age days old (expected a refresh within ~a month of Oct 28)"

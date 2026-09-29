@@ -111,3 +111,46 @@ must return **401** before you mint the replacement.
   never a bare-URL or `http.extraheader` config line on disk.
 - The swap preserves `Persist`/`UserName` and rolls back automatically if the
   read-back comparison fails — a half-swapped credential cannot survive.
+
+## The cron deploy key (five legs, one rotation)
+
+The monthly snapshot push (`ci.yml` cron `17 7 3 * *`) rides on a deploy key,
+and a full rotation invalidates ALL of the following — which is why
+`npm run rotate` re-mints them automatically after the swap:
+
+1. The **deploy key** registered on the repo (binds to a key ID).
+2. The **main-protection ruleset's DeployKey bypass actor** (binds to the
+   same key ID — rotating the key orphans the actor).
+3. The **`DEPLOY_KEY_PEM` Actions secret** (the private half).
+4. The **`PREFLIGHT_TOKEN` Actions secret** (a sealed copy of the CredMan
+   token; the deploy-key preflight needs `administration: read`, which no
+   `GITHUB_TOKEN` can ever hold — it is a GitHub App-only permission, and
+   declaring it in a workflow's `permissions` gets the whole file rejected).
+5. The **preflight itself** (`scripts/check-deploy-key.js`) must read all
+   legs green before the leg is declared done.
+
+Ordering is deliberate: mint+verify locally → register the NEW key → bind the
+new ruleset actor ADDITIVELY → swap the secret → run the preflight → delete
+the OLD key(s) last. Every step before the delete is additive, so a failure
+anywhere leaves the old push path alive. An interrupted run converges: the
+key title embeds a date+fp stamp, and a 422 (duplicate) adopts the existing
+key instead of orphaning a half-registered one. Local key material is always
+destroyed in a `finally` block.
+
+Subcommands:
+
+    npm run rotate -- --deploy-key-only   # re-mint without a token rotation
+    npm run rotate -- --skip-deploy-key   # full rotation without the re-mint
+    npm run rotate -- --keep-old-keys     # debugging: leave old keys registered
+
+Crypto notes (both proven against real libraries, not memory):
+`scripts/rotation/sealed-box.mjs` implements libsodium `crypto_box_seal`
+exactly — the 24-byte nonce is **BLAKE2b-192(ephPub || recipientPub)**, NOT
+the first 24 raw bytes (that reading throws "bad nonce size" and GitHub 422s
+"improperly encrypted secret"). KAT-verified against stdlib
+`hashlib.blake2b(digest_size=24)` == libsodium `crypto_generichash`, and
+proven end-to-end by GitHub accepting a secret sealed with it.
+`scripts/rotation/ssh-keygen.mjs` fingerprints the FULL RFC 4253 blob (not
+just the key bytes) and cross-checks against `ssh-keygen -lf` before anything
+registers remotely — the drill caught the raw-bytes version as a mismatch
+and aborted safely before touching GitHub.

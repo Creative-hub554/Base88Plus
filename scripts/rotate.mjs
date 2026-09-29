@@ -2,9 +2,12 @@
 /**
  * One-command GitHub token rotation for the Windows CredMan credential.
  *
- *   npm run rotate          # full flow: preflight → poller → approval → battery
+ *   npm run rotate          # full flow: preflight → poller → approval → battery → deploy-key re-mint
  *   npm run rotate -- --status
  *   npm run rotate -- --battery-only
+ *   npm run rotate -- --deploy-key-only   # re-mint the cron deploy key without a token rotation
+ *   npm run rotate -- --skip-deploy-key   # full flow without touching the cron deploy key
+ *   npm run rotate -- --keep-old-keys     # debugging: leave old cron keys registered
  *   npm run rotate -- --gens 12 --no-battery
  *
  * Orchestration only: every secret-touching step is delegated.
@@ -24,6 +27,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { runDeployKeyRotation } from './rotation/deploy-key.mjs';
+import { seal } from './rotation/sealed-box.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -33,6 +38,7 @@ const LOG = path.join(RUN_DIR, 'rotator.log');
 const DEVICE_CODE = path.join(RUN_DIR, 'device-code.json');
 const POLLER = path.join(__dirname, 'rotation', 'rotate-hard.cjs');
 const CRED_READ = path.join(__dirname, 'rotation', 'cred-read.ps1');
+const CHECK_DEPLOY_KEY = path.join(__dirname, 'check-deploy-key.js');
 const REPO_SLUG = process.env.ROTATE_REPO || 'Creative-hub554/Base88Plus';
 const LOGIN = process.env.ROTATE_LOGIN || 'Creative-hub554';
 const BATTERY_MARKER = 'cm-path-check-' + new Date().toISOString().slice(0, 10);
@@ -243,6 +249,86 @@ async function battery(token) {
   return failures;
 }
 
+/**
+ * PREFLIGHT_TOKEN is a sealed COPY of the CredMan token, so it rotated under
+ * us — re-seal it to the new token or the deploy-key preflight (which requires
+ * administration:read, impossible for GITHUB_TOKEN) goes red by design.
+ */
+async function sealPreflightToken(token) {
+  try {
+    const pk = await api(`/repos/${REPO_SLUG}/actions/secrets/public-key`, 'GET', token);
+    if (pk.code !== 200 || !pk.json?.key) {
+      console.error(`  seal: public-key -> ${pk.code}`);
+      return false;
+    }
+    const encrypted_value = seal(token, pk.json.key);
+    const put = await api(`/repos/${REPO_SLUG}/actions/secrets/PREFLIGHT_TOKEN`, 'PUT', token, {
+      key_id: pk.json.key_id,
+      encrypted_value,
+    });
+    if (put.code !== 201 && put.code !== 204) {
+      console.error(`  seal: PUT secrets/PREFLIGHT_TOKEN -> ${put.code}: ${put.text.slice(0, 140)}`);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.error(`  seal: ${e && e.message}`);
+    return false;
+  }
+}
+
+/**
+ * The deploy-key leg of a full rotation: the cron snapshot push rides on a
+ * write-enabled deploy key + a ruleset bypass actor bound to its ID + the
+ * DEPLOY_KEY_PEM secret — ALL THREE die with a credential rotation, so they
+ * are re-minted here (order-safe: the old key is deleted only after the
+ * preflight reads green). Then PREFLIGHT_TOKEN is re-sealed and the strict
+ * preflight must PASS, or the leg — and the run — fails.
+ */
+async function deployKeyLeg(token) {
+  console.log('── deploy-key leg ────────────────────────────────────────');
+  let failures = 0;
+  if (!token) { console.error('  no token for the deploy-key leg'); return 1; }
+  try {
+    const dk = await runDeployKeyRotation({
+      repoSlug: REPO_SLUG,
+      token,
+      keepOldKeys: flag('--keep-old-keys'),
+      log: (m) => console.log('  ' + m),
+    });
+    console.log(`  new key id=${dk.newKeyId} deletedOld=[${(dk.deletedOldKeyIds || []).join(',') || 'none'}]`);
+  } catch (e) {
+    console.error(`  deploy-key re-mint FAILED: ${e && e.message}`);
+    failures++;
+  }
+  const sealed = await sealPreflightToken(token);
+  console.log(sealed
+    ? '  PREFLIGHT_TOKEN re-sealed to the new token'
+    : '  PREFLIGHT_TOKEN re-seal FAILED — preflight stays red until re-sealed');
+  if (!sealed) failures++;
+  try {
+    const out = execFileSync(
+      process.execPath,
+      [CHECK_DEPLOY_KEY, '--repo', REPO_SLUG, '--token', token, '--require-audit'],
+      { encoding: 'utf8', timeout: 120_000 }
+    );
+    console.log('  ' + out.trim().split('\n').pop());
+    if (!out.includes('RESULT deploy-key-preflight PASS')) failures++;
+  } catch (e) {
+    console.error(`  strict preflight FAILED: ${String(e.stdout || e.message).trim().split('\n').slice(-2).join(' | ')}`);
+    failures++;
+  }
+  return failures;
+}
+
+async function deployKeyOnlyMode() {
+  const t = readToken();
+  if (!t) { console.error('FATAL: no token in CredMan.'); process.exit(1); }
+  const failures = await deployKeyLeg(t);
+  console.log(failures === 0 ? '\nDEPLOY_KEY_LEG_GREEN' : `\nDEPLOY_KEY_LEG_FAILED failures=${failures}`);
+  process.exit(failures === 0 ? 0 : 1);
+}
+
 function gitAuthEnv(token) {
   const b64 = Buffer.from(`x-access-token:${token}`).toString('base64');
   return Object.assign({}, process.env, {
@@ -270,6 +356,7 @@ async function batteryOnlyMode() {
 async function main() {
   if (flag('--status')) return statusMode();
   if (flag('--battery-only')) return batteryOnlyMode();
+  if (flag('--deploy-key-only')) return deployKeyOnlyMode();
 
   const { before } = preflight();
   const child = launchPoller();
@@ -297,6 +384,20 @@ async function main() {
     if (failures !== 0) process.exitCode = 1;
   } else {
     console.log('\nROTATION_OK (battery skipped by --no-battery; run `npm run rotate -- --battery-only` later)');
+  }
+
+  // The cron deploy key + PREFLIGHT_TOKEN die with every credential rotation —
+  // re-mint them here (skippable with --skip-deploy-key).
+  if (flag('--skip-deploy-key')) {
+    console.log('\nDEPLOY_KEY_LEG_SKIPPED (--skip-deploy-key; cron push path NOT re-minted)');
+  } else {
+    const dkFailures = await deployKeyLeg(readToken());
+    if (dkFailures !== 0) {
+      process.exitCode = 1;
+      console.log(`DEPLOY_KEY_LEG_FAILED failures=${dkFailures} (token swap survived; fix the leg with \`npm run rotate -- --deploy-key-only\`)`);
+    } else {
+      console.log('DEPLOY_KEY_LEG_GREEN');
+    }
   }
 }
 

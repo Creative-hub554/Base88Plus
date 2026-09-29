@@ -18,6 +18,11 @@
  *     round-trip) — skipped; Anybase apps are text
  *   • directories, empty files, size outliers — skipped
  *   • duplicate paths (case-folded on win32) — first wins
+ *   • a root project.json — RESERVED: the store record owns that name and
+ *     importing it would clobber the fresh project's record. When it
+ *     carries the anybase marker it is CONSUMED as the export's metadata
+ *     envelope (name/description restored); otherwise it is skipped with
+ *     the reserved reason. Nested project.json files are ordinary files.
  */
 
 import * as fs from "node:fs";
@@ -25,6 +30,15 @@ import * as path from "node:path";
 import JSZip from "jszip";
 import { createProject, saveAppFile } from "./store";
 import type { Project, ProjectFile } from "./types";
+
+/** Key of the metadata envelope inside an anybase export zip. */
+export const EXPORT_META_FILENAME = "project.json";
+
+/** Case-insensitive reserved-name check: on case-insensitive filesystems
+ * (Windows/macOS default) writing PROJECT.JSON would clobber the record. */
+function isReservedRootName(cleanPath: string): boolean {
+  return cleanPath.toLowerCase() === EXPORT_META_FILENAME;
+}
 
 export const SKIP_REASONS = {
   DIR: "directory entry",
@@ -35,6 +49,7 @@ export const SKIP_REASONS = {
   EMPTY: "empty file",
   TOO_LARGE: "file exceeds the import size limit",
   DUPLICATE: "duplicate path (first occurrence wins)",
+  RESERVED: "reserved by Anybase (the project record)",
 } as const;
 
 export type SkipReason = (typeof SKIP_REASONS)[keyof typeof SKIP_REASONS];
@@ -126,12 +141,58 @@ export function classifyZipEntry(
 }
 
 export interface ImportOptions {
+  /** Explicit caller override — beats everything, including export metadata. */
   name?: string;
   description?: string;
+  /**
+   * Weak hint (e.g. derived from the uploaded filename) — loses to export
+   * metadata so an anybase export restores its original app name.
+   */
+  fallbackName?: string;
   /** Per-entry limit override (tests). */
   maxFileBytes?: number;
   /** Aggregate limit override (tests). */
   maxTotalBytes?: number;
+}
+
+/**
+ * The metadata envelope anybase exports write at the zip root. Only the
+ * metadata-bearing fields are honored on import — the envelope carries
+ * the OLD project's id and timestamps, which must never leak into the
+ * fresh project (fresh ids are a hard invariant of the import).
+ */
+export interface ExportMeta {
+  name?: string;
+  description?: string;
+  /** Marker of an anybase export envelope (as opposed to an app file). */
+  anybase?: unknown;
+}
+
+/**
+ * Scan for the export metadata envelope at the zip root. The envelope is
+ * root project.json carrying the anybase marker (what the download route
+ * writes); only then is it consumed as metadata. Returns null otherwise
+ * — a foreign app's own project.json (even valid JSON with its own
+ * `name`) is store-reserved on import (skipped, never written to the
+ * workspace) and must never hijack the imported name.
+ */
+export async function readExportMeta(
+  files: ZipEntryLike[],
+): Promise<ExportMeta | null> {
+  const root = files.find(
+    (f) =>
+      String(f.name ?? "").replace(/^\.\//, "").toLowerCase() ===
+      EXPORT_META_FILENAME,
+  );
+  if (!root) return null;
+  try {
+    const parsed = JSON.parse(await root.async("string")) as ExportMeta;
+    if (typeof parsed !== "object" || parsed === null) return null;
+    if (parsed.anybase === undefined) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -149,9 +210,15 @@ export async function importFromEntries(
   const maxFileBytes = options.maxFileBytes ?? IMPORT_MAX_FILE_BYTES;
   const maxTotalBytes = options.maxTotalBytes ?? IMPORT_MAX_TOTAL_BYTES;
 
+  const meta = await readExportMeta(files);
   const project = createProject(
-    options.name?.trim() || "Imported app",
-    options.description?.trim() || "",
+    options.name?.trim() ||
+      (typeof meta?.name === "string" && meta.name.trim()) ||
+      options.fallbackName?.trim() ||
+      "Imported app",
+    options.description?.trim() ||
+      (typeof meta?.description === "string" ? meta.description : "") ||
+      "",
   );
   const imported: ProjectFile[] = [];
   const skipped: ImportSkipped[] = [];
@@ -174,8 +241,15 @@ export async function importFromEntries(
     }
     const cleanPath = verdict.path;
 
-    // Root project.json of an Anybase export is metadata, not an app file.
-    if (cleanPath === "project.json") continue;
+    // Root project.json is store-reserved: consumed as the anybase
+    // envelope when it carries the marker, skipped as reserved otherwise
+    // (case-insensitive — on Windows PROJECT.JSON would clobber the
+    // record). Nested project.json files are ordinary files.
+    if (isReservedRootName(cleanPath)) {
+      if (meta !== null) continue;
+      skipped.push({ path: cleanPath, reason: SKIP_REASONS.RESERVED });
+      continue;
+    }
 
     const dupeKey = process.platform === "win32" ? cleanPath.toLowerCase() : cleanPath;
     if (seen.has(dupeKey)) {

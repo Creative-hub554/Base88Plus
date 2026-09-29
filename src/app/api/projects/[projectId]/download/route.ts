@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import JSZip from "jszip";
+import { EXPORT_META_FILENAME } from "@/lib/zip-import";
 import { getProject, listAppFiles } from "@/lib/store";
 
 export async function GET(
@@ -11,6 +12,32 @@ export async function GET(
   if (!project) return new Response("Project not found", { status: 404 });
 
   const zip = new JSZip();
+  // Metadata envelope at the zip root: anybase marker + id/name/
+  // description/createdAt/updatedAt/template/pinnedSnapshot. The import
+  // consumes it (restoring the app's original name/description) when the
+  // marker is present; the OLD id/timestamps never leak into the fresh
+  // project. No secrets: Project carries none — BYO keys live in
+  // settings, never in the project record. Root project.json is
+  // store-reserved, so this name can never collide with an app file
+  // (listAppFiles excludes the record), and a foreign zip carrying its
+  // own project.json just gets skipped as reserved on import.
+  zip.file(
+    EXPORT_META_FILENAME,
+    JSON.stringify(
+      {
+        anybase: 1,
+        id: project.id,
+        name: project.name,
+        description: project.description,
+        createdAt: project.createdAt,
+        updatedAt: project.updatedAt,
+        ...(project.template ? { template: project.template } : {}),
+        ...(project.pinnedSnapshot ? { pinnedSnapshot: project.pinnedSnapshot } : {}),
+      },
+      null,
+      2,
+    ),
+  );
   for (const file of listAppFiles(projectId)) {
     zip.file(file.path, file.content);
   }

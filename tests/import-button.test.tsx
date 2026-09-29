@@ -41,7 +41,7 @@ beforeEach(() => {
       expect(form.get("file")).toBeInstanceOf(File);
       return fetchResponse().then((res) => {
         lastWire = {
-          name: String(form.get("name") ?? ""),
+          name: String(form.get("nameFromFilename") ?? ""),
           url: String(_input),
           method: init?.method ?? "GET",
         };
@@ -66,11 +66,12 @@ afterEach(() => {
 });
 
 describe("ImportZipButton", () => {
-  it("posts the picked file with a derived name, toasts, and navigates into the app", async () => {
+  it("posts the picked file with a filename fallback, toasts, and navigates into the app", async () => {
     pickFile("recipe-box.zip");
     await waitFor(() => expect(mockPush).toHaveBeenCalledWith("/app/imported-1"));
     expect(lastWire?.url).toBe("/api/projects/import");
     expect(lastWire?.method).toBe("POST");
+    // Weak hint field: an anybase export's embedded metadata beats it.
     expect(lastWire?.name).toBe("recipe-box");
     expect(screen.getByTestId("toast-host").textContent).toContain("Imported 3 file(s)");
   });

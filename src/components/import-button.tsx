@@ -26,8 +26,11 @@ export function ImportZipButton() {
     try {
       const form = new FormData();
       form.append("file", file);
+      // Weak hint only: an anybase export's embedded metadata wins over
+      // this, so an exported app imports under its ORIGINAL name — the
+      // filename stem is just the fallback for foreign zips.
       const stem = file.name.replace(/\.zip$/i, "").replace(/[^a-z0-9-]+/gi, " ").trim();
-      if (stem) form.append("name", stem);
+      if (stem) form.append("nameFromFilename", stem);
 
       const res = await fetch("/api/projects/import", { method: "POST", body: form });
       const data = (await res.json().catch(() => ({}))) as {

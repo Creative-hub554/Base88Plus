@@ -11,7 +11,15 @@
  *
  * Usage:
  *   node scripts/verify-generated-app.js <app.js-or-project-dir> <assertions.cjs>
- *   npm run verify:app -- projects-data/<id>/app.js .freebuff/assert-mine.cjs
+ *   node scripts/verify-generated-app.js --all
+ *   npm run verify:app -- --all
+ *
+ * The `--all` mode runs every pin under tests/generated/<app>/ (a pinned
+ * app.js + an assertions.cjs). Pins are REGRESSION SNAPSHOTs: copy a
+ * generated app's workspace app.js next to its assertions and commit both —
+ * CI then re-verifies the pinned behavior on every push even though the
+ * live projects-data/ workspaces are gitignored. See
+ * tests/generated/README.md for the convention.
  *
  * Assertions file contract (CommonJS):
  *   module.exports = {
@@ -27,23 +35,31 @@
  *                           REQUIRED before load — lists are never auto-made.
  *   h.ticks(n)              fire every pending interval n times (drives the
  *                           app's own tick — immune to tab throttling).
+ *   h.fireDocument(type)    invoke document listeners the app registered
+ *                           (e.g. DOMContentLoaded init or keydown handlers).
+ *   h.fireWindow(type)      same for window listeners.
  *   h.pendingIntervals()    live interval count (leak checks).
  *   h.check(label, cond)    tally one assertion; prints PASS/FAIL.
  *
- * Sandbox: document (querySelector/querySelectorAll/getElementById/body),
- * window, in-memory localStorage/sessionStorage, console pass-through,
- * stubbed setInterval/clearInterval/setTimeout/requestAnimationFrame.
- * Everything else is the vm realm's standard builtins. Apps that touch
- * unstubbed globals fail loudly — extend deliberately, don't guess.
+ * Sandbox: document (querySelector/querySelectorAll/getElementById/body/
+ * createElement/addEventListener), window, in-memory
+ * localStorage/sessionStorage, console pass-through, stubbed
+ * setInterval/clearInterval/setTimeout/requestAnimationFrame. Elements stub
+ * classList, listeners, attributes/dataset, appendChild and
+ * get/setAttribute. Everything else is the vm realm's standard builtins.
+ * Apps that touch unstubbed globals fail loudly — extend deliberately,
+ * don't guess.
  *
- * Exit: 0 = RESULT LOGIC_PASS (all assertions green), 1 = any failure,
- * app throw, or assertions-file error.
+ * Exit: 0 = every suite LOGIC_PASS, 1 = any failure, app throw, or
+ * assertions-file error. With --all and zero pins: 0 (nothing to protect).
  */
 'use strict';
 
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+
+const PINS_DIR = path.resolve(__dirname, '..', 'tests', 'generated');
 
 function makeStorage() {
   const m = new Map();
@@ -65,6 +81,9 @@ function makeEl(name) {
     textContent: '',
     hidden: false,
     value: '',
+    attributes: {},
+    dataset: {}, // plain object; seed data-* values in setup() — not auto-linked to attributes
+    children: [],
     classList: {
       toggle(c, on) {
         if (on === undefined) on = !classes.has(c);
@@ -77,6 +96,11 @@ function makeEl(name) {
     addEventListener: (t, fn) => { handlers[t] = fn; },
     removeEventListener: (t) => { delete handlers[t]; },
     click: () => { if (handlers.click) handlers.click(); },
+    getAttribute(n) {
+      return Object.prototype.hasOwnProperty.call(this.attributes, n) ? this.attributes[n] : null;
+    },
+    setAttribute(n, v) { this.attributes[n] = String(v); },
+    appendChild(c) { this.children.push(c); return c; },
   };
 }
 
@@ -84,6 +108,8 @@ function createHarness() {
   const bySelector = new Map();
   const lists = new Map();
   const intervals = new Map();
+  const docListeners = {};
+  const winListeners = {};
   let nextId = 1;
   let passCount = 0;
   let failCount = 0;
@@ -108,9 +134,10 @@ function createHarness() {
       },
       getElementById: (id) => el('#' + id),
       get body() { return el('body'); },
-      addEventListener: () => {},
+      addEventListener: (t, fn) => { (docListeners[t] = docListeners[t] || []).push(fn); },
+      createElement: (tag) => makeEl(tag),
     },
-    window: { addEventListener: () => {} },
+    window: { addEventListener: (t, fn) => { (winListeners[t] = winListeners[t] || []).push(fn); } },
     localStorage: makeStorage(),
     sessionStorage: makeStorage(),
     console,
@@ -139,6 +166,14 @@ function createHarness() {
         for (const fn of [...intervals.values()]) fn();
       }
     },
+    // Fire document/window listeners (DOMContentLoaded, keydown, …) that the
+    // app registered while loading — with a minimal synthetic event object.
+    fireDocument(type, event) {
+      for (const fn of docListeners[type] || []) fn(event || { type, target: el('body') });
+    },
+    fireWindow(type, event) {
+      for (const fn of winListeners[type] || []) fn(event || { type });
+    },
     pendingIntervals: () => intervals.size,
     check(label, cond) {
       if (cond) { passCount++; console.log('  PASS', label); }
@@ -149,36 +184,33 @@ function createHarness() {
   };
 }
 
-function main() {
-  const [appArg, assertsArg] = process.argv.slice(2);
-  if (!appArg || !assertsArg) {
-    console.error('usage: node scripts/verify-generated-app.js <app.js-or-project-dir> <assertions.cjs>');
-    process.exit(1);
-  }
+/** Resolves the app entry: a directory pins its app.js; a file passes through. */
+function resolveAppPath(appArg) {
+  const stat = fs.existsSync(appArg) && fs.statSync(appArg);
+  const appPath = stat && stat.isDirectory() ? path.join(appArg, 'app.js') : appArg;
+  return fs.existsSync(appPath) ? appPath : null;
+}
 
-  const appStat = fs.existsSync(appArg) && fs.statSync(appArg);
-  const appPath = appStat && appStat.isDirectory() ? path.join(appArg, 'app.js') : appArg;
-  if (!fs.existsSync(appPath)) {
-    console.error(`APP_NOT_FOUND ${appPath}`);
-    process.exit(1);
-  }
-
-  const assertsPath = path.resolve(assertsArg);
+/**
+ * Runs one suite. Returns { pass, fail, crashed } and prints the per-suite
+ * RESULT line. Never exits — the caller decides, so --all can tally.
+ */
+function runSuite(label, appPath, assertsPath) {
+  console.log(`\nsuite ${label}`);
+  const h = createHarness();
   let mod;
   try {
-    mod = require(assertsPath);
+    mod = require(path.resolve(assertsPath));
   } catch (e) {
     console.error(`ASSERTIONS_LOAD_FAILED ${e.message}`);
-    process.exit(1);
+    return { pass: 0, fail: 1, crashed: true };
   }
   const setup = typeof mod === 'function' ? null : mod.setup;
   const run = typeof mod === 'function' ? mod : mod.run;
   if (typeof run !== 'function') {
     console.error('assertions file must export run(h) (or be a function)');
-    process.exit(1);
+    return { pass: 0, fail: 1, crashed: true };
   }
-
-  const h = createHarness();
   try {
     if (setup) setup(h);
     vm.runInContext(fs.readFileSync(appPath, 'utf8'), vm.createContext(h.sandbox), {
@@ -189,14 +221,62 @@ function main() {
     // e.stack's first frame is the vm.runInContext call site in THIS file;
     // the actionable part is the message (e.g. an unregistered list).
     console.error(`APP_ERROR ${e && e.message ? e.message : e}`);
-    console.log(`\nRESULT LOGIC_FAIL pass=${h.pass} fail=${h.fail + 1}`);
-    process.exit(1);
+    return { pass: h.pass, fail: h.fail + 1, crashed: true };
+  }
+  console.log(`RESULT ${h.fail === 0 ? 'LOGIC_PASS' : 'LOGIC_FAIL'} pass=${h.pass} fail=${h.fail}`);
+  return { pass: h.pass, fail: h.fail, crashed: false };
+}
+
+function discoverPins() {
+  if (!fs.existsSync(PINS_DIR)) return [];
+  return fs
+    .readdirSync(PINS_DIR, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => ({
+      name: d.name,
+      app: path.join(PINS_DIR, d.name, 'app.js'),
+      asserts: path.join(PINS_DIR, d.name, 'assertions.cjs'),
+    }))
+    .filter((s) => fs.existsSync(s.app) && fs.existsSync(s.asserts));
+}
+
+function main() {
+  const argv = process.argv.slice(2);
+
+  if (argv.includes('--all')) {
+    const pins = discoverPins();
+    if (pins.length === 0) {
+      console.log(`no generated-app pins under ${path.relative(process.cwd(), PINS_DIR)} — nothing to verify (see tests/generated/README.md)`);
+      process.exit(0);
+    }
+    let pass = 0;
+    let fail = 0;
+    let crashed = 0;
+    for (const pin of pins) {
+      const r = runSuite(pin.name, pin.app, pin.asserts);
+      pass += r.pass;
+      fail += r.fail;
+      if (r.crashed) crashed++;
+    }
+    console.log(`\nRESULT --all ${fail === 0 ? 'LOGIC_PASS' : 'LOGIC_FAIL'} suites=${pins.length} pass=${pass} fail=${fail}${crashed ? ` crashed=${crashed}` : ''}`);
+    process.exit(fail === 0 ? 0 : 1);
   }
 
-  console.log(`\nRESULT ${h.fail === 0 ? 'LOGIC_PASS' : 'LOGIC_FAIL'} pass=${h.pass} fail=${h.fail}`);
-  process.exit(h.fail === 0 ? 0 : 1);
+  const [appArg, assertsArg] = argv;
+  if (!appArg || !assertsArg) {
+    console.error('usage: node scripts/verify-generated-app.js <app.js-or-project-dir> <assertions.cjs>');
+    console.error('       node scripts/verify-generated-app.js --all');
+    process.exit(1);
+  }
+  const appPath = resolveAppPath(appArg);
+  if (!appPath) {
+    console.error(`APP_NOT_FOUND ${appArg}`);
+    process.exit(1);
+  }
+  const r = runSuite(path.basename(appPath), appPath, assertsArg);
+  process.exit(r.fail === 0 ? 0 : 1);
 }
 
 if (require.main === module) main();
 
-module.exports = { createHarness, makeEl, makeStorage };
+module.exports = { createHarness, makeEl, makeStorage, runSuite, discoverPins };

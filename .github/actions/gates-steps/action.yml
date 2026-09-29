@@ -31,3 +31,11 @@ runs:
     - name: Tests
       shell: bash
       run: npm test
+
+    # Regression-pinned generated apps (tests/generated/<app>/): runs every
+    # pin headlessly via the vm harness. Exit 0 when zero pins exist, so
+    # removing all pins never breaks CI. Never skip silently: a pin that
+    # fails = a regeneration changed pinned behavior.
+    - name: Generated-app regression pins
+      shell: bash
+      run: npm run verify:generated

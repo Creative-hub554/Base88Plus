@@ -76,9 +76,13 @@ function makeStorage() {
 function makeEl(name) {
   const classes = new Set();
   const handlers = {};
+  // DOM-faithful: real textContent stringifies on assignment, and suites
+  // compare with strings — so the stub must too.
+  let text = '';
   return {
     name,
-    textContent: '',
+    get textContent() { return text; },
+    set textContent(v) { text = String(v); },
     // innerHTML assignment models the clear-and-rebuild pattern: setting it
     // wipes children (and text), so suites can assert refresh-not-append.
     get innerHTML() { return this.textContent; },
@@ -100,12 +104,25 @@ function makeEl(name) {
       remove: (...cs) => cs.forEach((c) => classes.delete(c)),
       contains: (c) => classes.has(c),
     },
+    // className stays in sync with classList, like the real DOM (generated
+    // apps mix `el.className = "a b"` and classList.add freely).
+    get className() { return [...classes].join(' '); },
+    set className(v) {
+      classes.clear();
+      String(v).split(/\s+/).filter(Boolean).forEach((c) => classes.add(c));
+    },
     addEventListener: (t, fn) => { handlers[t] = fn; },
     removeEventListener: (t) => { delete handlers[t]; },
     click(event) {
       if (handlers.click) {
         handlers.click(event || { type: 'click', preventDefault() {}, stopPropagation() {} });
       }
+    },
+    // Fire any listener type registered on this element (submit, keydown,
+    // change, …) — click() above is the shorthand for 'click'.
+    dispatch(type, event) {
+      const ev = event || { type, target: this, preventDefault() {}, stopPropagation() {} };
+      if (handlers[type]) handlers[type](ev);
     },
     getAttribute(n) {
       return Object.prototype.hasOwnProperty.call(this.attributes, n) ? this.attributes[n] : null;
@@ -307,6 +324,9 @@ function main() {
   process.exit(r.fail === 0 ? 0 : 1);
 }
 
-if (require.main === module) main();
-
+// Export BEFORE main() runs: an assertions file that requires this module
+// back (e.g. to spin a second harness for a reload test) resolves during
+// main()'s own require cycle and must see complete exports, not {}.
 module.exports = { createHarness, makeEl, makeStorage, runSuite, discoverPins };
+
+if (require.main === module) main();

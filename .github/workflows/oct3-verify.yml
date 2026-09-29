@@ -1,0 +1,87 @@
+# Oct 3 cron-day verifier - runs scripts/verify-oct3.ps1 FOR REAL when the
+# monthly snapshot cron fires (ci.yml cron "17 7 3 * *"), waits for that run
+# to finish, and posts the verdict on issue #18. Before Oct 3 it is a
+# smoke-only drill (same plumbing, SMOKE_RUN_ID against the latest main CI
+# run, nothing posted) so the path can be exercised on demand.
+#
+# Why a second workflow instead of extending the Monday drill: the drill is
+# deliberately date-aware PLUMBING smoke (VERIFY_FORCE=1, DRY_RUN=1, a
+# cherry-picked healthy run) and must stay green all year. THIS workflow is
+# the real thing: no force, no dry-run - the verifier's own date gate decides
+# when it is allowed to look for the scheduled run, and the verdict (including
+# ATTENTION_* / FAIL_* states) is recorded on #18 either way.
+#
+# Cron design: ci.yml fires at 07:17 UTC; the run takes minutes, so the first
+# verifier attempt at 07:47 will usually find it completed (the verifier exits
+# 0 with RUN_IN_PROGRESS if not). Two more attempts (09:07, 19:17 UTC) absorb
+# runner-queue delays and give the live-upstream-compare branch a second look.
+# On any other day the schedule is a no-op (the verifier refuses via its date
+# gate: exit 2, nothing posted).
+name: Oct 3 verifier
+
+on:
+  schedule:
+    - cron: '47 7 3 10 *' # Oct 3, 07:47 UTC - after the 07:17 snapshot cron
+    - cron: '7 9 3 10 *'  # Oct 3, 09:07 UTC - retry if the cron run was queued
+    - cron: '17 19 3 10 *'# Oct 3, 19:17 UTC - evening backstop / live re-compare
+  workflow_dispatch:
+    inputs:
+      smoke:
+        description: 'Smoke mode: verify plumbing against the latest successful main CI run (nothing posted, works on any date)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: oct3-verify
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the verifier
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Run verify-oct3.ps1 (real, posts to #18) or smoke mode
+        id: verify
+        env:
+          VERIFY_TOKEN: ${{ github.token }}
+          SMOKE: ${{ inputs.smoke || 'false' }}
+        run: |
+          set -euo pipefail
+          if [ "$SMOKE" = "true" ]; then
+            rid=$(curl -s -H "Authorization: Bearer ${VERIFY_TOKEN}" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=main&status=success&per_page=1" \
+              | jq -r '.workflow_runs[0].id // ""')
+            [ -n "$rid" ] && [ "$rid" != "null" ] || { echo "no successful main CI run to smoke against"; exit 1; }
+            echo "SMOKE mode: verifying plumbing against CI run $rid (nothing will be posted)"
+            export VERIFY_FORCE=1 DRY_RUN=1 SMOKE_RUN_ID="$rid"
+            set +e
+            pwsh -NoProfile -File scripts/verify-oct3.ps1 | tee oct3-verify.log
+            echo "exit=$?" >> oct3-verify.log
+            exit 0
+          fi
+          echo "REAL mode: $(date -u '+%F %T') UTC - the verifier's own date gate decides"
+          set +e
+          pwsh -NoProfile -File scripts/verify-oct3.ps1 | tee oct3-verify.log
+          code=$?
+          echo "exit=$code" >> oct3-verify.log
+          case "$code" in
+            0) echo "verifier exit 0 (pass / in-progress / already recorded)";;
+            2) echo "date gate: not cron day - nothing to do (schedule is a no-op today)";;
+            1) echo "verdict recorded - ATTENTION or FAIL (see the log above / issue #18)"; exit 1;;
+            *) echo "unexpected verifier exit $code"; exit 1;;
+          esac
+
+      - name: Attach the verifier log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: oct3-verify-log
+          path: oct3-verify.log
+          if-no-files-found: error

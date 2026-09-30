@@ -37,6 +37,7 @@ export default async function AppPage({
       initialMessages={messages as BuilderUIMessage[]}
       initialFiles={files}
       kickoffBrief={kickoffBrief}
+      initialName={project.name}
     />
   );
 }

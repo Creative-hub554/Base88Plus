@@ -16,7 +16,7 @@ later API queries (CI runs, artifacts).
 
 ## 1. PR shepherd (~10 min/cycle)
 
-The one true path for landing anything. Used for #43–#75 without a single
+The one true path for landing anything. Used for #43–#80 without a single
 failed landing once the payload-file rule was learned.
 
 ```bash
@@ -169,6 +169,10 @@ real `Uint8Array` copies, not Buffers from another realm.
 
 ## 4. Cron-day verify + check (Oct 3 snapshot, Oct 28 promotion)
 
+Every step has a one-command human check: `npm run check:oct3` /
+`check:oct28` on the cron days themselves, `check:oct4` / `check:oct29` on
+the sentinel mornings after (exact exit codes in the landmine list below).
+
 **Oct 3 (fully autonomous):**
 1. 07:17 UTC — ci.yml cron: preflight → refresh → deploy-key push
    (`snapshot-push-ok` artifact + bot commit).
@@ -191,7 +195,10 @@ real `Uint8Array` copies, not Buffers from another realm.
    once with `CLOSE=1` — closing #18 is never automated.
 
 Smoke rehearsals (any day, nothing posted): dispatch either workflow with
-`smoke: true`. Oct 3 smoke expects `SMOKE_PASS*`; Oct 28 smoke sets
+`smoke: true` — and since #80 the scripts force `DRY_RUN=1` themselves
+whenever `VERIFY_FORCE`/`VERIFY_GNOMON` is set, so a faked-time rehearsal
+cannot post even if you forget the flag (see the landmine list). Oct 3
+smoke expects `SMOKE_PASS*`; Oct 28 smoke sets
 `VERIFY_EXPECT_CANARY=1`, so `SMOKE_FAIL_NOT_PROMOTED` →
 `SMOKE_PRE_PROMO_AS_EXPECTED` is the GREEN pre-promo outcome.
 
@@ -205,6 +212,29 @@ rehearsal proves nothing about the credential: only a full-path test-fire
 (design: `force_snapshot_refresh` on ci.yml, pinned to main) exercises the
 push. A "Permission denied (publickey)" AFTER a server roundtrip means
 key-not-registered, not key-not-offered.
+- **An env override that fakes TIME must force DRY — faking the clock fakes
+  the evidence, and the date gate and the post gate are two different
+  gates.** `VERIFY_FORCE=1` / `VERIFY_GNOMON=yyyy-MM-dd` exist for plumbing
+  rehearsals, but a forced/faked run produces a verdict that is FALSE on the
+  real calendar, so passing the date gate must never unlock the post gate.
+  Learned 2026-09-30: an oct4-sentinel gnomon rehearsal without `DRY_RUN`
+  posted a false `SENTINEL_NO_SCHEDULED_RUN` dated 2026-10-04 onto #18 (the
+  comment was deleted and #18 restored). The guard is now in all four
+  scripts (verify-oct3, verify-oct28, both sentinels): when either override
+  is set the script sets `DRY_RUN=1` itself and prints `FORCED_DRY_RUN` — a
+  rehearsal cannot post even if the operator forgets the flag.
+- **Every chain link has a one-command check (`package.json` `scripts`).**
+  `npm run check:oct3` — scheduled oct3-verify attempts on cron day + the
+  latest `post-Oct-3 verifier` verdict on #18; exit 0 = `CONFIRMED_PASS
+  verdict=PASS_REFRESHED` (or `PASS_UNCHANGED`), 1 = `ATTENTION` naming the
+  next step, 2 = `NOT_YET` (armed, but cron day hasn't produced a verdict —
+  re-run after 08:00 UTC Oct 3). `check:oct28` — same shape on promotion
+  day; it routes `NO_DISPATCH_RUN` to `ATTENTION` and prints the exact
+  dispatch curl, because the verifier exits 0 on that verdict BY DESIGN (a
+  nudge) while the check needs the operator act now. `check:oct4` /
+  `check:oct29` — run the day-after sentinels directly: exit 0 = chain
+  satisfied (silent), 1 = tripped (one idempotent comment on #18), 2 = date
+  gate (any day before the sentinel morning).
 - **Closure is the FINAL act — premature closure blinds consumers.** #18 was
   found closed on 2026-09-29 (a month before promotion day); the Oct 29
   sentinel's `closed = mission accomplished` early-out would have gone
@@ -238,8 +268,8 @@ never query an id/class that isn't in the shipped HTML.
 Five layers, outermost first: **weekly heartbeat** (every schedule, every
 week) → **date-specific sentinels** (the morning after a cron day) →
 **cron-day verifiers** (the real verdicts) → **checkers**
-(`check:oct3` / `check:oct28`, the one-shot human entry) → **operator
-runbook**. Each layer assumes the one below it may be silently skipped —
+(`check:oct3` / `check:oct28` / `check:oct4` / `check:oct29`, the one-shot
+human entry) → **operator runbook**. Each layer assumes the one below it may be silently skipped —
 that assumption is the whole design.
 
 ### Day-after sentinel recipe (Oct 4 / Oct 29 pattern)

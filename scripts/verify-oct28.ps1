@@ -52,6 +52,14 @@ $base = 'https://api.github.com/repos/Creative-hub554/Base88Plus'
 # VERIFY_GNOMON=yyyy-MM-dd fakes today for deterministic rehearsal of the
 # date-dependent branches (date gate, provenance alarm) without waiting.
 $today = if ($env:VERIFY_GNOMON) { $env:VERIFY_GNOMON } else { (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd') }
+# The date-gate overrides exist for plumbing rehearsals - a faked date can
+# produce a verdict that is FALSE on the real calendar, so posting must stay
+# impossible whenever either is set (guard added after an oct4-sentinel
+# gnomon rehearsal posted a false alarm onto #18 on 2026-09-30).
+if ($env:VERIFY_FORCE -eq '1' -or $env:VERIFY_GNOMON) {
+  $env:DRY_RUN = '1'
+  Write-Output 'FORCED_DRY_RUN (VERIFY_FORCE/VERIFY_GNOMON set - rehearsals never post)'
+}
 if ($today -lt '2026-10-28' -and $env:VERIFY_FORCE -ne '1') {
   Write-Output "REFUSED_DATE_GATE today=$today promotion day is 2026-10-28 (VERIFY_FORCE=1 overrides for plumbing tests)"; exit 2
 }

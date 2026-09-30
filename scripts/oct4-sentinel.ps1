@@ -71,6 +71,16 @@ $base = 'https://api.github.com/repos/Creative-hub554/Base88Plus'
 
 # --- 1. date gate: the sentinel only means anything on/after Oct 4 ---
 $today = if ($env:VERIFY_GNOMON) { $env:VERIFY_GNOMON } else { (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd') }
+# The date-gate overrides (VERIFY_FORCE / VERIFY_GNOMON) exist for plumbing
+# rehearsals - a faked date can produce a verdict that is FALSE on the real
+# calendar, so posting must stay impossible whenever either is set.
+# Rehearsed the hard way 2026-09-30: a gnomon rehearsal without DRY_RUN
+# posted a false SENTINEL_NO_SCHEDULED_RUN dated 2026-10-04 onto #18 (the
+# comment was deleted and this guard added).
+if ($env:VERIFY_FORCE -eq '1' -or $env:VERIFY_GNOMON) {
+  $env:DRY_RUN = '1'
+  Write-Output 'FORCED_DRY_RUN (VERIFY_FORCE/VERIFY_GNOMON set - rehearsals never post)'
+}
 if ($today -lt '2026-10-04' -and $env:VERIFY_FORCE -ne '1') {
   Write-Output "REFUSED_DATE_GATE today=$today sentinel fires 2026-10-04T01:00Z (VERIFY_FORCE=1 or VERIFY_GNOMON overrides for plumbing tests)"; exit 2
 }

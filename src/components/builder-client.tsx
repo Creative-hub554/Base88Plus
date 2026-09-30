@@ -502,11 +502,105 @@ function SuggestionChips({
   );
 }
 
+/**
+ * Inline project-name editor in the builder header — the UI leg of the
+ * metadata lifecycle (set at create/import, now editable in place).
+ * Displays the name; click to edit, Enter/blur commits, Escape cancels.
+ * The server is THE validator (PATCH /api/projects/[id]/meta): the 80-char
+ * cap here is only UX, and the committed value is whatever the server
+ * normalized. Failures toast and revert; the id never changes, so every
+ * existing link (dashboard, snapshots, published slug) stays valid.
+ */
+export function ProjectNameEditor({
+  projectId,
+  initialName,
+}: {
+  projectId: string;
+  initialName: string;
+}) {
+  const [name, setName] = useState(initialName);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const commit = async () => {
+    setEditing(false);
+    const next = draft.trim().slice(0, 80);
+    if (busy || !next || next === name) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/meta`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: next }),
+      });
+      const data = (await res.json().catch(() => null)) as
+        | { project?: { name?: string }; error?: string }
+        | null;
+      if (res.ok && data?.project?.name) {
+        setName(data.project.name);
+        notify("Project renamed — exports and the dashboard now use the new name.");
+      } else {
+        notify(data?.error || "Rename failed — try again.", "danger");
+      }
+    } catch {
+      notify("Rename failed — network error.", "danger");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            (e.target as HTMLInputElement).blur();
+          }
+          if (e.key === "Escape") {
+            e.preventDefault();
+            setEditing(false);
+          }
+        }}
+        maxLength={80}
+        aria-label="Project name"
+        className="w-56 rounded border border-neutral-700 bg-neutral-900 px-2 py-1 text-sm text-white outline-none focus:border-neutral-500"
+      />
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        setDraft(name);
+        setEditing(true);
+      }}
+      title="Rename project"
+      disabled={busy}
+      className="group flex items-center gap-1.5 rounded px-1 py-0.5 text-left hover:bg-neutral-800/60 disabled:opacity-50"
+    >
+      <span className="max-w-[16rem] truncate text-sm text-neutral-200">{name}</span>
+      <span
+        aria-hidden
+        className="text-xs text-neutral-600 group-hover:text-neutral-400"
+      >
+        ✎
+      </span>
+    </button>
+  );
+}
+
 export function BuilderClient({
   projectId,
   initialMessages,
   initialFiles,
   kickoffBrief,
+  initialName,
 }: {
   projectId: string;
   initialMessages: BuilderUIMessage[];
@@ -517,6 +611,8 @@ export function BuilderClient({
    * first chat message so creating an app starts generating it.
    */
   kickoffBrief?: string | null;
+  /** Project display name for the header (server-rendered initial value). */
+  initialName?: string;
 }) {
   const [files, setFiles] = useState<WorkspaceFile[]>(initialFiles);
   const [activeFile, setActiveFile] = useState<string | null>(
@@ -966,7 +1062,7 @@ export function BuilderClient({
             anybase
           </a>
           <span className="text-xs text-neutral-600">/</span>
-          <span className="text-sm text-neutral-400">{projectId}</span>
+          <ProjectNameEditor projectId={projectId} initialName={initialName ?? projectId} />
         </div>
         <div className="flex flex-1 justify-center items-center gap-3 px-4">
           <ProjectModelPicker projectId={projectId} refreshKey={pickerRefreshKey} />

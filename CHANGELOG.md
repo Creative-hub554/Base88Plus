@@ -14,6 +14,11 @@ process. Download zips: the
 
 ### Added
 
+- **Description editing on dashboard project cards** — the metadata
+  lifecycle now reaches the list view: click a card's description to edit
+  it in place (save, cancel, or clear it back to "No description"),
+  backed by the same server-validated PATCH as the builder header.
+
 - **Monitoring stack** — three year-round/one-shot layers under the
   cron-day verifiers so a silently skipped schedule is caught within
   days, not on its next cron day: a day-after sentinel for the Oct 3

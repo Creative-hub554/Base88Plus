@@ -10,6 +10,24 @@ and CI goes green — see [CONTRIBUTING.md](CONTRIBUTING.md) for the release
 process. Download zips: the
 [Releases page](https://github.com/Creative-hub554/Base88Plus/releases/latest).
 
+## [0.6.0] - 2026-09-30
+
+Eleventh release: projects are no longer frozen with the name they were
+born with — rename and describe them in place, from the builder header.
+
+### Added
+
+- Rename + describe projects in place: the builder header now shows the
+  project's name (`anybase / <name>`) with a pencil — click to edit,
+  Enter/blur commits, Escape cancels. `PATCH /api/projects/[id]/meta`
+  is the human-edit leg of the metadata lifecycle: the store validates
+  (trim, 80/500 caps, non-empty name), bumps `updatedAt`, and returns
+  the persisted record; the server-normalized value always wins.
+  Ids never change, so dashboard links, snapshots, and the published
+  slug stay valid, and the new identity flows through export/import
+  via the metadata envelope (round-trip tested through the real
+  download route).
+
 ## [0.5.0] - 2026-09-29
 
 Tenth release: assets now enter projects as easily as files do — drop
@@ -470,6 +488,11 @@ was superseded by the 0.2.0 bump before anything was ever published. No
 artifacts exist for this version; it is recorded here so the semver story
 stays honest.
 
+[0.6.0]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.6.0
+[0.5.0]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.5.0
+[0.4.0]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.4.0
+[0.3.1]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.3.1
+[0.3.0]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.3.0
 [0.2.9]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.9
 [0.2.8]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.8
 [0.2.7]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.2.7

@@ -12,6 +12,15 @@ process. Download zips: the
 
 ## [Unreleased]
 
+## [Unreleased]
+
+### Changed
+
+- The builder-header name editor and the dashboard card description
+  editor share one inline meta-edit state machine (wire contract,
+  server-wins normalization, failure handling) instead of two copies;
+  the header editor is now covered by tests.
+
 ## [0.7.0] — 2026-09-30
 
 Twelfth release: metadata editing reaches the list view, and the

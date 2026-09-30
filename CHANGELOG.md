@@ -10,6 +10,27 @@ and CI goes green — see [CONTRIBUTING.md](CONTRIBUTING.md) for the release
 process. Download zips: the
 [Releases page](https://github.com/Creative-hub554/Base88Plus/releases/latest).
 
+## [Unreleased]
+
+### Added
+
+- **Monitoring stack** — three year-round/one-shot layers under the
+  cron-day verifiers so a silently skipped schedule is caught within
+  days, not on its next cron day: a day-after sentinel for the Oct 3
+  chain (Oct 4 01:00 UTC cron; requires a scheduled oct3-verify attempt
+  and a `PASS_*` verdict on #18, trips with a `SENTINEL_*` comment
+  otherwise), the same for the Oct 28 promotion chain (Oct 29 cron,
+  with a distinct "awaiting dispatch" reminder state), and a weekly
+  schedule heartbeat (Mondays 07:53 UTC) that audits every scheduled
+  workflow's API state, cron syntax, satisfiability, and last due fire
+  vs actual runs — self-auditing, zero dependencies.
+
+### Fixed
+
+- The Oct 29 sentinel ignores premature #18 closures (only a closure
+  dated on/after promotion day counts as done), after its own smoke
+  drill found the issue closed a month before promotion day.
+
 ## [0.6.0] - 2026-09-30
 
 Eleventh release: projects are no longer frozen with the name they were

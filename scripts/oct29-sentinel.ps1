@@ -12,9 +12,9 @@ record (issue #18) plus the run list, and classifies four states:
   SATISFIED (exit 0, silent):
     - the latest 'post-Oct-28 verifier' verdict on #18 is PASS_* (the
       promotion was verified and recorded), OR
-    - #18 is CLOSED (closure is operator-only via CLOSE=1 after a PASS -
-      mission accomplished even if a later verifier comment re-opened the
-      classification), OR
+    - #18 is CLOSED on/after promotion day (closure is operator-only via
+      CLOSE=1 after a PASS; a closure dated BEFORE the chain ran is
+      premature and does NOT blind the sentinel), OR
     - scheduled attempts exist and the latest is still in progress (fail
       on evidence, not on a race)
   SENTINEL_NO_SCHEDULED_RUN (exit 1 + comment): none of the four Oct 28
@@ -87,12 +87,23 @@ if ($today -lt '2026-10-29' -and $env:VERIFY_FORCE -ne '1') {
   Write-Output "REFUSED_DATE_GATE today=$today sentinel fires 2026-10-29T01:00Z (VERIFY_FORCE=1 or VERIFY_GNOMON overrides for plumbing tests)"; exit 2
 }
 
-# --- 2. early-out: an operator-closed #18 IS the mission accomplished ---
+# --- 2. early-out: an operator-closed #18 on/after promotion day IS the mission accomplished ---
+# Guard on closed_at: closure is the operator's LAST act (CLOSE=1 after
+# PASS_PROMOTED on Oct 28). A closure BEFORE the chain ran (rehearsed live
+# 2026-09-30: #18 was found closed since 2026-09-29) must NOT blind the
+# sentinel - fall through and judge on runs + verdicts like normal, and flag
+# the premature closure in any trip comment. Cast BOTH sides (playbook
+# landmine: string-vs-DateTime comparison direction).
 $issue = Invoke-RestMethod -Uri "$base/issues/18" -Headers $h
-Write-Output "ISSUE18 state=$($issue.state) comments=$($issue.comments)"
+Write-Output "ISSUE18 state=$($issue.state) closed_at=$($issue.closed_at) comments=$($issue.comments)"
+$closedEarly = $false
 if ($issue.state -eq 'closed') {
-  Write-Output 'SENTINEL_OK #18 is closed - the promotion chain completed (closure is operator-only via CLOSE=1 after a PASS).'
-  exit 0
+  if ([datetime]$issue.closed_at -ge [datetime]'2026-10-28') {
+    Write-Output 'SENTINEL_OK #18 closed on/after promotion day - the promotion chain completed (closure is operator-only via CLOSE=1 after a PASS).'
+    exit 0
+  }
+  $closedEarly = $true
+  Write-Output "WARN_CLOSED_EARLY #18 was closed at $($issue.closed_at), BEFORE the promotion chain ran - closure cannot mean mission-accomplished; judging on runs + verdicts instead."
 }
 
 # --- 3. question 1: did a scheduled oct28-verify attempt fire in the window? ---
@@ -141,6 +152,9 @@ if ($day.Count -eq 0) {
 }
 
 # --- 5. record the gap on #18 (idempotent by sentinel-day marker) ---
+if ($closedEarly) {
+  $comment = $comment + "`n`nNote: #18 is currently CLOSED (since $($issue.closed_at)) even though the promotion chain has not completed - reopening it is an operator call (the runbook reserves closure for after PASS_PROMOTED on Oct 28)."
+}
 $prior = Invoke-RestMethod -Uri "$base/issues/18/comments?since=2026-10-29T00:00:00Z&per_page=50" -Headers $h
 $marker = "sentinel (checked $today)"
 if (@($prior) | Where-Object { $_.body -like "*$marker*" }) { Write-Output "ALREADY_RECORDED ($marker)"; exit 1 }

@@ -11,7 +11,9 @@
 #
 #   SATISFIED -> exit 0, silent:
 #     - latest post-Oct-28 verifier verdict on #18 is PASS_*, OR
-#     - #18 is CLOSED (operator-only via CLOSE=1 after a PASS), OR
+#     - #18 CLOSED on/after promotion day (operator-only via CLOSE=1 after a
+#       PASS; a closure dated BEFORE the chain ran is premature and does NOT
+#       blind the sentinel), OR
 #     - scheduled attempts exist and the latest is still in progress
 #   SENTINEL_NO_SCHEDULED_RUN -> job red + #18 comment:
 #     none of the four crons ever fired (the silent-skip gap this exists for)

@@ -1,0 +1,98 @@
+# Oct 29 sentinel - the day-after alarm for the Oct 28 promotion chain.
+#
+# GitHub skips scheduled workflows SILENTLY (60-day repo inactivity
+# auto-disable, a manually disabled schedule, runner-queue stalls): there is
+# no red run, no notification, nothing. oct28-verify's four Oct 28 crons
+# (07:23/09:33/13:33/19:33 UTC) are therefore unverifiable from inside
+# themselves - if none of them ever fires, nothing on Earth notices. THIS
+# workflow is the independent witness: on Oct 29 at 01:00 UTC it runs
+# scripts/oct29-sentinel.ps1, which reads the promotion day's durable record
+# (#18 + the run list) and classifies four states:
+#
+#   SATISFIED -> exit 0, silent:
+#     - latest post-Oct-28 verifier verdict on #18 is PASS_*, OR
+#     - #18 is CLOSED (operator-only via CLOSE=1 after a PASS), OR
+#     - scheduled attempts exist and the latest is still in progress
+#   SENTINEL_NO_SCHEDULED_RUN -> job red + #18 comment:
+#     none of the four crons ever fired (the silent-skip gap this exists for)
+#   SENTINEL_AWAITING_DISPATCH -> job red + #18 comment:
+#     chain fired, latest verdict still NO_DISPATCH_RUN ~24h after promotion
+#     day - the operator act is still undone. A loud reminder, NOT a chain
+#     malfunction (NO_DISPATCH_RUN is exit 0 BY DESIGN in the verifier).
+#   SENTINEL_RUN_NO_PASS -> job red + #18 comment:
+#     chain fired but the latest verdict is FAIL_*/PRE_PROMO_* or nothing
+#     was posted.
+#
+# Latest-verdict-wins: the newest verifier comment decides, so a late FAIL
+# after an earlier PASS still trips. The script's comment is idempotent per
+# sentinel day. On any other day the schedule is a no-op (the script's date
+# gate refuses: exit 2, nothing posted). workflow_dispatch is SMOKE-ONLY:
+# same plumbing with VERIFY_FORCE=1 DRY_RUN=1 against the live API, never
+# posts (real evidence can only come from the scheduled run).
+name: Oct 29 sentinel
+
+on:
+  schedule:
+    - cron: '0 1 29 10 *' # Oct 29, 01:00 UTC - the morning-after witness for the Oct 28 promotion crons
+  workflow_dispatch:
+    inputs:
+      smoke:
+        description: 'Smoke mode: exercise the sentinel plumbing with DRY_RUN (nothing posted, works on any date)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+concurrency:
+  group: oct29-sentinel
+  cancel-in-progress: false
+
+jobs:
+  sentinel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the sentinel
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Run oct29-sentinel.ps1 (real, may post to #18) or smoke mode
+        env:
+          VERIFY_TOKEN: ${{ github.token }}
+          SMOKE: ${{ inputs.smoke || 'false' }}
+        run: |
+          set -euo pipefail
+          if [ "$SMOKE" = "true" ]; then
+            echo "SMOKE mode: plumbing drill with VERIFY_FORCE=1 DRY_RUN=1 (nothing will be posted)"
+            export VERIFY_FORCE=1 DRY_RUN=1
+            set +e
+            pwsh -NoProfile -File scripts/oct29-sentinel.ps1 | tee oct29-sentinel.log
+            code=$?
+            echo "exit=$code" >> oct29-sentinel.log
+            case "$code" in
+              0|1) echo "smoke OK: plumbing exercised (exit $code = dry satisfied / dry trip)";;
+              *)   echo "unexpected sentinel exit $code in smoke mode"; exit 1;;
+            esac
+            exit 0
+          fi
+          echo "REAL mode: $(date -u '+%F %T') UTC - the sentinel's own date gate decides"
+          set +e
+          pwsh -NoProfile -File scripts/oct29-sentinel.ps1 | tee oct29-sentinel.log
+          code=$?
+          echo "exit=$code" >> oct29-sentinel.log
+          case "$code" in
+            0) echo "sentinel satisfied (PASS recorded / #18 closed / attempts still in progress)";;
+            2) echo "date gate: not on/after Oct 29 - nothing to do (schedule is a no-op today)";;
+            1) echo "SENTINEL TRIPPED - gap posted on issue #18"; exit 1;;
+            *) echo "unexpected sentinel exit $code"; exit 1;;
+          esac
+
+      - name: Attach the sentinel log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: oct29-sentinel-log
+          path: oct29-sentinel.log
+          if-no-files-found: error

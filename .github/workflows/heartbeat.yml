@@ -1,0 +1,81 @@
+# Weekly schedule heartbeat - the year-round watchdog for EVERY scheduled
+# workflow in the repo.
+#
+# GitHub skips scheduled workflows SILENTLY: 60-day repo inactivity
+# auto-disables schedules, a schedule can be disabled manually, the runner
+# queue can stall. The date-specific sentinels (oct4, oct29) only stand watch
+# on their own mornings after; THIS workflow is the weekly layer that catches
+# a dead schedule within days, all year.
+#
+# What it audits (scripts/heartbeat-audit.mjs, zero dependencies):
+#   1. API state of every workflow - disabled_inactivity/disabled_manually
+#      is an instant finding (the 60-day-rule tripwire).
+#   2. Cron syntax of every `schedule:` line (parsed from the checkout).
+#   3. Satisfiability - a cron that can never fire is flagged, not skipped.
+#   4. Last due fire vs actual scheduled runs (90 min queue grace, floored by
+#      the workflow's creation date so date-gated chains are NOT_YET_DUE
+#      before their first due date, not falsely dead).
+# The heartbeat audits ITSELF too - its own cron is in the audited set, so a
+# dead heartbeat surfaces through the drill/CI surface instead of rotting.
+#
+# Findings -> the script exits 1 and posts ONE deduped comment on issue #18
+# (idempotent per audit day); a healthy audit exits 0 silently. The job fails
+# on findings so the red run + notification is the primary alert.
+# workflow_dispatch is a dry-run drill (HEARTBEAT_DRY_RUN=1: never posts;
+# exit 1 in dry mode just means findings were found, which is fine).
+name: Schedule heartbeat
+
+on:
+  schedule:
+    - cron: '53 7 * * 1' # Mondays 07:53 UTC - weekly; off the top-of-hour spike (house style)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run: print findings, never post to #18 (works on any date)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+concurrency:
+  group: schedule-heartbeat
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the auditor
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Run the schedule heartbeat audit
+        env:
+          HEARTBEAT_TOKEN: ${{ github.token }}
+          DRY: ${{ inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          if [ "$DRY" = "true" ]; then
+            echo "DRY mode: audit prints findings, never posts to #18"
+            export HEARTBEAT_DRY_RUN=1
+          fi
+          set +e
+          node scripts/heartbeat-audit.mjs | tee heartbeat-audit.log
+          code=$?
+          echo "exit=$code" >> heartbeat-audit.log
+          case "$code" in
+            0) echo "heartbeat healthy: every schedule is active, satisfiable, and fired on time";;
+            1) echo "heartbeat found dead/disabled schedules (see the log and issue #18)"; exit 1;;
+            *) echo "unexpected audit exit $code"; exit 1;;
+          esac
+
+      - name: Attach the audit log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: heartbeat-audit-log
+          path: heartbeat-audit.log
+          if-no-files-found: error

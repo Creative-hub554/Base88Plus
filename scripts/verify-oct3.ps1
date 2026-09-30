@@ -44,6 +44,14 @@ $base = 'https://api.github.com/repos/Creative-hub554/Base88Plus'
 
 # --- 1. date gate ---
 $today = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
+# The date-gate override exists for plumbing rehearsals - a forced run can
+# produce a verdict that is FALSE on the real calendar, so posting must stay
+# impossible whenever it is set (guard added after an oct4-sentinel gnomon
+# rehearsal posted a false alarm onto #18 on 2026-09-30).
+if ($env:VERIFY_FORCE -eq '1') {
+  $env:DRY_RUN = '1'
+  Write-Output 'FORCED_DRY_RUN (VERIFY_FORCE set - rehearsals never post)'
+}
 if ($today -lt '2026-10-03' -and $env:VERIFY_FORCE -ne '1') {
   Write-Output "REFUSED_DATE_GATE today=$today cron fires 2026-10-03T07:17Z (VERIFY_FORCE=1 overrides for plumbing tests)"; exit 2
 }

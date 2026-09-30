@@ -19,6 +19,8 @@
     "check:deploy-key": "node scripts/check-deploy-key.js",
     "check:oct3": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/oct3-check.ps1",
     "check:oct28": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/oct28-check.ps1",
+    "check:oct4": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/oct4-sentinel.ps1",
+    "check:oct29": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/oct29-sentinel.ps1",
     "update:schedule": "node scripts/update-schedule.js",
     "rotate": "node scripts/rotate.mjs",
     "verify:app": "node scripts/verify-generated-app.js",

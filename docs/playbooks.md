@@ -16,7 +16,7 @@ later API queries (CI runs, artifacts).
 
 ## 1. PR shepherd (~10 min/cycle)
 
-The one true path for landing anything. Used for #43–#65 without a single
+The one true path for landing anything. Used for #43–#75 without a single
 failed landing once the payload-file rule was learned.
 
 ```bash
@@ -63,8 +63,9 @@ sha.
   gets the whole workflow file REJECTED: zero jobs, instant failure, and NO
   annotation names the cause. Validate workflow YAML against SchemaStore's
   `github-workflow.json` before pushing (a copy lives at
-  `.freebuff/tmp/wfschema.json`; correct PyYAML's bare-`on:` → `True` quirk
-  first).
+  `.freebuff/tmp/wfschema.json`; re-fetch with `curl -sL` — schemastore.org
+  301s and the bare URL returns a 171-byte redirect page; correct PyYAML's
+  bare-`on:` → `True` quirk first).
 - Inline (non-file) JSON in curl on Windows silently fails → always
   `--data-binary @file`. But building the payload file with `printf` is
   EQUALLY unsafe: printf processes backslash escapes in the format string
@@ -94,6 +95,11 @@ sha.
   "no tracking information". Sync explicitly — `git pull --ff-only origin
   main` — or use the `git fetch origin main` + `git merge --ff-only
   origin/main` pair in step 6.
+- `eslint .` lints EVERYTHING, including brand-new ci-only scripts — an
+  unused helper in a fresh `scripts/*.mjs` fails `gates` on ALL Node legs
+  (caught at #75, the only red PR CI of the session). `npx eslint .` before
+  pushing even infra-only changes; the battery-first habit is not
+  app-code-only.
 
 ---
 
@@ -199,6 +205,21 @@ rehearsal proves nothing about the credential: only a full-path test-fire
 (design: `force_snapshot_refresh` on ci.yml, pinned to main) exercises the
 push. A "Permission denied (publickey)" AFTER a server roundtrip means
 key-not-registered, not key-not-offered.
+- **Closure is the FINAL act — premature closure blinds consumers.** #18 was
+  found closed on 2026-09-29 (a month before promotion day); the Oct 29
+  sentinel's `closed = mission accomplished` early-out would have gone
+  silent-green no matter what the Oct 28 chain did (caught by its own smoke
+  drill, fixed in #74: closure counts only when `closed_at` ≥ the chain's
+  date; a premature closure falls through to runs+verdicts judgment and is
+  flagged in any trip comment). Reopening is an operator act. Corollary for
+  ANY new automation: never treat issue state alone as evidence — comments
+  and runs are the record, state is a side effect.
+- **Poll a specific run id, never `runs?per_page=1` + substring matching.**
+  A break-on-`"None"` loop mis-fires twice: `null` is a legitimate
+  `conclusion` for in-progress runs, and the "latest run" listing can change
+  under you. Fetch the run id first, then poll `GET /actions/runs/{id}`
+  until `status == completed`. The lazy variant burned a full 600 s poll
+  window on a run that was already green.
 
 ---
 
@@ -209,3 +230,60 @@ Generate → `npm run verify:app` (harness; `--strict` is the CI default) →
 verbatim, runs the full set, rolls back on failure) → CI pins enforce forever.
 Prompt rules the generator must obey: single-writer state, clear-before-refill,
 never query an id/class that isn't in the shipped HTML.
+
+---
+
+## 6. Monitoring stack (sentinels + weekly heartbeat)
+
+Five layers, outermost first: **weekly heartbeat** (every schedule, every
+week) → **date-specific sentinels** (the morning after a cron day) →
+**cron-day verifiers** (the real verdicts) → **checkers**
+(`check:oct3` / `check:oct28`, the one-shot human entry) → **operator
+runbook**. Each layer assumes the one below it may be silently skipped —
+that assumption is the whole design.
+
+### Day-after sentinel recipe (Oct 4 / Oct 29 pattern)
+
+1. Identify the watched chain's durable record: its #18 comment marker
+   (`post-Oct-3 verifier` / `post-Oct-28 verifier`) and verdict alphabet
+   (`PASS_*` / `NO_DISPATCH_RUN` / `FAIL_*` / `PRE_PROMO_*`).
+2. Script (`scripts/oct4-sentinel.ps1`, `scripts/oct29-sentinel.ps1`): date
+   gate (`<` first due date + 1, `VERIFY_GNOMON` to rehearse), classify from
+   runs + comments (NOT issue state — see recipe 4's closure landmine),
+   **latest-verdict-wins** so a late FAIL after an earlier PASS still trips,
+   exit 0 silent when satisfied / exit 1 + one idempotent comment on #18
+   (marker `sentinel (checked <date>)`) when tripped. Auth = `GITHUB_TOKEN`
+   with `issues: write` (no PAT, no `administration` — ever).
+3. Workflow: ONE date-only cron (`0 1 4 10 *`, `0 1 29 10 *`) the morning
+   after the chain's last attempt + queue slack; `workflow_dispatch` =
+   smoke-only drill (`VERIFY_FORCE=1 DRY_RUN=1`, exit 0/1 both acceptable =
+   dry satisfied / dry tripped), log as artifact.
+4. **Smoke-drill on a real runner BEFORE the real cron** — static YAML
+   validation proves nothing about runtime (that drill is what caught the
+   premature-closure blindness).
+
+### Weekly heartbeat recipe (`heartbeat.yml` + `scripts/heartbeat-audit.mjs`)
+
+Mondays 07:53 UTC; zero dependencies (hand-rolled cron math + YAML scanner,
+25 unit tests). Per scheduled workflow: API `state == active`; every
+`schedule:` cron line parses; forward-satisfiable within **1500 days** (a
+full leap cycle — 400 misses Feb-29 crons half the time); the most recent
+**due** fire has a scheduled run at/after it (a run starts AT the due
+minute, so `>= due` is the evidence; in-progress counts; a RED run still
+proves the schedule fired), floored by the workflow's `created_at` so
+date-gated chains are `NOT_YET_DUE` before their first fire, never falsely
+dead. Findings → exit 1 + one deduped comment on #18 (8-day window);
+healthy → exit 0 silent. The heartbeat audits its own cron too, and excludes
+GitHub's synthetic `dynamic/dependabot/...` workflow entry (no file).
+Rehearse with the `dry_run` dispatch input; extend by adding crons — the
+auditor picks them up automatically.
+
+**Landmines (each cost a debugging cycle once):** cron single values are
+single values — `53` is 53, not vixie 53-max (only `a/s` means `a-max/s`);
+the next-fire walk must INCLUDE the start day (later-today slots count);
+comment lines INSIDE a `schedule:` block must not reset a line-scanner's
+state machine (ci.yml/codeql/drill were silently skipped that way); a
+typo'd cron must be a FINDING (unsatisfiable), never a skip; and a
+day-after sentinel must stay meaningful when the chain is operator-in-the-
+loop — `SENTINEL_AWAITING_DISPATCH` is a reminder, not a malfunction, and
+the comment must say so.

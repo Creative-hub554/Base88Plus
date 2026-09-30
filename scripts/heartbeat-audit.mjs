@@ -186,11 +186,6 @@ function extractCrons(text) {
   return crons;
 }
 
-function workflowNameFromText(text) {
-  const m = text.match(/^name:\s*(.+)$/m);
-  return m ? m[1].trim().replace(/^['"]|['"]$/g, '') : null;
-}
-
 // ------------------------------------------------------------------- main
 async function main() {
   const now = Date.now();

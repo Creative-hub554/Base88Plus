@@ -12,6 +12,12 @@ process. Download zips: the
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-09-30
+
+Twelfth release: metadata editing reaches the list view, and the
+automation-hardening work gets its publish — every cron chain now has a
+day-after witness and a weekly heartbeat.
+
 ### Added
 
 - **Description editing on dashboard project cards** — the metadata
@@ -514,6 +520,7 @@ was superseded by the 0.2.0 bump before anything was ever published. No
 artifacts exist for this version; it is recorded here so the semver story
 stays honest.
 
+[0.7.0]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.7.0
 [0.6.0]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.6.0
 [0.5.0]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.5.0
 [0.4.0]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.4.0

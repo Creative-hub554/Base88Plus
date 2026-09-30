@@ -1,0 +1,94 @@
+# Oct 4 sentinel - the day-after alarm for the Oct 3 cron chain.
+#
+# GitHub skips scheduled workflows SILENTLY (60-day repo inactivity
+# auto-disable, a manually disabled schedule, runner-queue stalls): there is
+# no red run, no notification, nothing. oct3-verify's three Oct 3 crons
+# (07:47/09:07/19:17 UTC) are therefore unverifiable from inside themselves -
+# if none of them ever fires, nothing on Earth notices. THIS workflow is the
+# independent witness: on Oct 4 at 01:00 UTC it runs scripts/oct4-sentinel.ps1,
+# which asks two questions and fails the job + posts a SENTINEL_* comment on
+# issue #18 when either answer is no:
+#
+#   1. did a scheduled (event=schedule) oct3-verify run attempt fire in the
+#      Oct 3..Oct 4 window? (none = the cron chain never fired at all)
+#   2. did it land a PASS_* verdict comment on #18? (run but no PASS = the
+#      chain fired but failed to record a pass)
+#
+# Both yes -> exit 0, silent. Either no -> job red + #18 comment (the red run
+# and the comment are the alert; the script's comment is idempotent per day).
+# After a satisfying pass the job is green and posts nothing.
+#
+# Cron design: a single Oct-4-only cron (`0 1 4 10 *`), 01:00 UTC - after the
+# last Oct 3 attempt (19:17) plus queue slack, early enough to still be
+# actionable cron-day-adjacent. On any other day the schedule is a no-op (the
+# script's own date gate refuses: exit 2, nothing posted). Like the other
+# cron-day workflows, workflow_dispatch is SMOKE-ONLY: it runs the same
+# plumbing with VERIFY_FORCE=1 DRY_RUN=1 against the live API and never posts
+# (real evidence for a real trip can only come from the scheduled run).
+name: Oct 4 sentinel
+
+on:
+  schedule:
+    - cron: '0 1 4 10 *' # Oct 4, 01:00 UTC - the morning-after witness for the Oct 3 crons
+  workflow_dispatch:
+    inputs:
+      smoke:
+        description: 'Smoke mode: exercise the sentinel plumbing with DRY_RUN (nothing posted, works on any date)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+concurrency:
+  group: oct4-sentinel
+  cancel-in-progress: false
+
+jobs:
+  sentinel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the sentinel
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Run oct4-sentinel.ps1 (real, may post to #18) or smoke mode
+        env:
+          VERIFY_TOKEN: ${{ github.token }}
+          SMOKE: ${{ inputs.smoke || 'false' }}
+        run: |
+          set -euo pipefail
+          if [ "$SMOKE" = "true" ]; then
+            echo "SMOKE mode: plumbing drill with VERIFY_FORCE=1 DRY_RUN=1 (nothing will be posted)"
+            export VERIFY_FORCE=1 DRY_RUN=1
+            set +e
+            pwsh -NoProfile -File scripts/oct4-sentinel.ps1 | tee oct4-sentinel.log
+            code=$?
+            echo "exit=$code" >> oct4-sentinel.log
+            case "$code" in
+              0|1) echo "smoke OK: plumbing exercised (exit $code = dry verdict / dry trip)";;
+              *)   echo "unexpected sentinel exit $code in smoke mode"; exit 1;;
+            esac
+            exit 0
+          fi
+          echo "REAL mode: $(date -u '+%F %T') UTC - the sentinel's own date gate decides"
+          set +e
+          pwsh -NoProfile -File scripts/oct4-sentinel.ps1 | tee oct4-sentinel.log
+          code=$?
+          echo "exit=$code" >> oct4-sentinel.log
+          case "$code" in
+            0) echo "sentinel satisfied (chain fired and PASS recorded, or attempts still in progress)";;
+            2) echo "date gate: not on/after Oct 4 - nothing to do (schedule is a no-op today)";;
+            1) echo "SENTINEL TRIPPED - gap posted on issue #18"; exit 1;;
+            *) echo "unexpected sentinel exit $code"; exit 1;;
+          esac
+
+      - name: Attach the sentinel log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: oct4-sentinel-log
+          path: oct4-sentinel.log
+          if-no-files-found: error

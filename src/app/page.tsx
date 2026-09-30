@@ -6,6 +6,8 @@ import {
   listProjects,
 } from "@/lib/store";
 import { ImportZipButton } from "@/components/import-button";
+import { ProjectCardDescription } from "@/components/project-card-description";
+import { ToastHost } from "@/components/toast";
 
 export const dynamic = "force-dynamic";
 
@@ -76,10 +78,10 @@ export default function HomePage() {
         ) : (
           <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {projects.map((p) => (
-              <li key={p.id}>
+              <li key={p.id} className="relative">
                 <Link
                   href={`/app/${p.id}`}
-                  className="block rounded-xl border border-neutral-800 p-4 transition hover:border-neutral-600 hover:bg-neutral-900"
+                  className="block rounded-xl border border-neutral-800 p-4 pb-10 transition hover:border-neutral-600 hover:bg-neutral-900"
                 >
                   <div className="flex items-center justify-between">
                     <div className="font-medium text-white">{p.name}</div>
@@ -90,9 +92,10 @@ export default function HomePage() {
                       </span>
                     )}
                   </div>
-                  <div className="mt-1 line-clamp-2 text-sm text-neutral-500">
-                    {p.description || "No description"}
-                  </div>
+                  {/* The description slot is reserved here; the editable
+                      overlay renders on top of it as a SIBLING so the card
+                      link and the editor's controls never nest. */}
+                  <div className="mt-1 h-10" aria-hidden />
                   <div className="mt-2 text-xs text-neutral-600">
                     Updated{" "}
                     {new Date(p.updatedAt).toLocaleString(undefined, {
@@ -129,11 +132,20 @@ export default function HomePage() {
                    );
                   })()}
                 </Link>
+                <div className="absolute inset-x-4 top-10">
+                  <ProjectCardDescription
+                    projectId={p.id}
+                    initialDescription={p.description}
+                  />
+                </div>
               </li>
             ))}
           </ul>
         )}
       </section>
+      {/* Dashboard-level host: the client components here (import, card
+          editors) toast through the module bus. */}
+      <ToastHost />
     </main>
   );
 }

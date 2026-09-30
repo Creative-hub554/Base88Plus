@@ -5,6 +5,7 @@ import { DefaultChatTransport } from "ai";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { BuilderUIMessage, FileUpdate } from "@/lib/types";
 import { choose, notify, ToastHost } from "./toast";
+import { useInlineMetaEdit } from "./inline-meta-edit";
 import { FilePanel } from "./asset-uploader";
 
 interface WorkspaceFile {
@@ -506,10 +507,9 @@ function SuggestionChips({
  * Inline project-name editor in the builder header — the UI leg of the
  * metadata lifecycle (set at create/import, now editable in place).
  * Displays the name; click to edit, Enter/blur commits, Escape cancels.
- * The server is THE validator (PATCH /api/projects/[id]/meta): the 80-char
- * cap here is only UX, and the committed value is whatever the server
- * normalized. Failures toast and revert; the id never changes, so every
- * existing link (dashboard, snapshots, published slug) stays valid.
+ * Wire contract, server-wins normalization, and failure handling live in
+ * the shared `useInlineMetaEdit` (same rules as the dashboard card
+ * description editor); only the header-specific shell remains here.
  */
 export function ProjectNameEditor({
   projectId,
@@ -518,45 +518,21 @@ export function ProjectNameEditor({
   projectId: string;
   initialName: string;
 }) {
-  const [name, setName] = useState(initialName);
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
+  const meta = useInlineMetaEdit({
+    projectId,
+    field: "name",
+    initial: initialName,
+    clientCap: 80,
+    savedToast: () => "Project renamed — exports and the dashboard now use the new name.",
+  });
 
-  const commit = async () => {
-    setEditing(false);
-    const next = draft.trim().slice(0, 80);
-    if (busy || !next || next === name) return;
-    setBusy(true);
-    try {
-      const res = await fetch(`/api/projects/${projectId}/meta`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: next }),
-      });
-      const data = (await res.json().catch(() => null)) as
-        | { project?: { name?: string }; error?: string }
-        | null;
-      if (res.ok && data?.project?.name) {
-        setName(data.project.name);
-        notify("Project renamed — exports and the dashboard now use the new name.");
-      } else {
-        notify(data?.error || "Rename failed — try again.", "danger");
-      }
-    } catch {
-      notify("Rename failed — network error.", "danger");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  if (editing) {
+  if (meta.editing) {
     return (
       <input
         autoFocus
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
+        value={meta.draft}
+        onChange={(e) => meta.setDraft(e.target.value)}
+        onBlur={() => void meta.commit()}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();
@@ -564,7 +540,7 @@ export function ProjectNameEditor({
           }
           if (e.key === "Escape") {
             e.preventDefault();
-            setEditing(false);
+            meta.cancel();
           }
         }}
         maxLength={80}
@@ -576,15 +552,12 @@ export function ProjectNameEditor({
   return (
     <button
       type="button"
-      onClick={() => {
-        setDraft(name);
-        setEditing(true);
-      }}
+      onClick={meta.start}
       title="Rename project"
-      disabled={busy}
+      disabled={meta.busy}
       className="group flex items-center gap-1.5 rounded px-1 py-0.5 text-left hover:bg-neutral-800/60 disabled:opacity-50"
     >
-      <span className="max-w-[16rem] truncate text-sm text-neutral-200">{name}</span>
+      <span className="max-w-[16rem] truncate text-sm text-neutral-200">{meta.value}</span>
       <span
         aria-hidden
         className="text-xs text-neutral-600 group-hover:text-neutral-400"

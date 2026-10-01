@@ -13,7 +13,7 @@ export async function GET(
 
   const zip = new JSZip();
   // Metadata envelope at the zip root: anybase marker + id/name/
-  // description/tags/createdAt/updatedAt/template/pinnedSnapshot. The
+  // description/tags/status/createdAt/updatedAt/template/pinnedSnapshot. The
   // import consumes it (restoring the app's original name/description)
   // when the marker is present; the OLD id/timestamps never leak into
   // the fresh project. No secrets: Project carries none — BYO keys live
@@ -30,6 +30,7 @@ export async function GET(
         name: project.name,
         description: project.description,
         ...(project.tags ? { tags: project.tags } : {}),
+        ...(project.status ? { status: project.status } : {}),
         createdAt: project.createdAt,
         updatedAt: project.updatedAt,
         ...(project.template ? { template: project.template } : {}),

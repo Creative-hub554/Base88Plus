@@ -12,6 +12,15 @@ process. Download zips: the
 
 ## [Unreleased]
 
+### Added
+
+- Project status — the fourth inline metadata surface and the first
+  application of playbooks recipe 7: set `idea` / `building` / `shipped`
+  from a select on the dashboard card (colored-dot badge once set),
+  validated by the same meta store as every other field, carried by the
+  export/import envelope, and filterable — the dashboard bar now ANDs
+  `/?status=` with `/?tag=`.
+
 ## [0.9.0] — 2026-10-01
 
 Fourteenth release: tags earn their keep — the dashboard doubles as the

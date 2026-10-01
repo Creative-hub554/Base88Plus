@@ -29,6 +29,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import JSZip from "jszip";
 import { BINARY_EXTENSIONS, createProject, saveAppFile, setProjectMeta } from "./store";
+import { isProjectStatus } from "./status";
 import type { Project, ProjectFile } from "./types";
 
 /** Key of the metadata envelope inside an anybase export zip. */
@@ -177,6 +178,8 @@ export interface ExportMeta {
   description?: string;
   /** One comma-separated string (the store's tags shape). */
   tags?: string;
+  /** One of PROJECT_STATUSES (the store validates; invalid values ignored). */
+  status?: string;
   /** Marker of an anybase export envelope (as opposed to an app file). */
   anybase?: unknown;
 }
@@ -238,6 +241,12 @@ export async function importFromEntries(
   // (createProject has no tags parameter, so this is the ONE validator).
   if (typeof meta?.tags === "string" && meta.tags.trim()) {
     project.tags = setProjectMeta(project.id, { tags: meta.tags }).tags;
+  }
+  // Envelope status likewise — but enum-invalid values are IGNORED rather
+  // than thrown: the envelope is advisory metadata and a hand-edited zip
+  // must not fail the whole import here.
+  if (typeof meta?.status === "string" && isProjectStatus(meta.status)) {
+    project.status = setProjectMeta(project.id, { status: meta.status }).status;
   }
   const imported: ProjectFile[] = [];
   const skipped: ImportSkipped[] = [];

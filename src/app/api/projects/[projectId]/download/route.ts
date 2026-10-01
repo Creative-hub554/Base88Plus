@@ -13,11 +13,11 @@ export async function GET(
 
   const zip = new JSZip();
   // Metadata envelope at the zip root: anybase marker + id/name/
-  // description/createdAt/updatedAt/template/pinnedSnapshot. The import
-  // consumes it (restoring the app's original name/description) when the
-  // marker is present; the OLD id/timestamps never leak into the fresh
-  // project. No secrets: Project carries none — BYO keys live in
-  // settings, never in the project record. Root project.json is
+  // description/tags/createdAt/updatedAt/template/pinnedSnapshot. The
+  // import consumes it (restoring the app's original name/description)
+  // when the marker is present; the OLD id/timestamps never leak into
+  // the fresh project. No secrets: Project carries none — BYO keys live
+  // in settings, never in the project record. Root project.json is
   // store-reserved, so this name can never collide with an app file
   // (listAppFiles excludes the record), and a foreign zip carrying its
   // own project.json just gets skipped as reserved on import.
@@ -29,6 +29,7 @@ export async function GET(
         id: project.id,
         name: project.name,
         description: project.description,
+        ...(project.tags ? { tags: project.tags } : {}),
         createdAt: project.createdAt,
         updatedAt: project.updatedAt,
         ...(project.template ? { template: project.template } : {}),

@@ -243,21 +243,23 @@ export function setProjectModelOverride(
   );
 }
 
-/** Name/description caps — shared by the meta route and its tests. */
+/** Name/description/tags caps — shared by the meta route and its tests. */
 export const META_NAME_MAX = 80;
 export const META_DESCRIPTION_MAX = 500;
+export const META_TAGS_MAX = 120;
 
 /**
- * Rename + describe a project in place — the human-edit leg of the
+ * Rename + describe + tag a project in place — the human-edit leg of the
  * metadata lifecycle (set at create, carried by export/import, now
  * editable). THE validator: trims, enforces caps, refuses an empty name
  * (projects are addressable by name in the dashboard), bumps updatedAt,
  * and returns the persisted record so callers can prove what was written.
- * Unknown project → throws "Project not found".
+ * Tags are ONE comma-separated string (trimmed per tag); an all-separator
+ * string tags nothing. Unknown project → throws "Project not found".
  */
 export function setProjectMeta(
   projectId: string,
-  patch: { name?: string; description?: string },
+  patch: { name?: string; description?: string; tags?: string },
 ): Project {
   const p = getProject(projectId);
   if (!p) throw new Error("Project not found");
@@ -268,6 +270,15 @@ export function setProjectMeta(
   }
   if (patch.description !== undefined) {
     p.description = patch.description.trim().slice(0, META_DESCRIPTION_MAX);
+  }
+  if (patch.tags !== undefined) {
+    const tags = patch.tags
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean)
+      .join(", ");
+    if (tags) p.tags = tags.slice(0, META_TAGS_MAX);
+    else delete p.tags;
   }
   p.updatedAt = new Date().toISOString();
   fs.writeFileSync(

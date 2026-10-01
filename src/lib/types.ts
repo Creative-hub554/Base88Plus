@@ -16,6 +16,12 @@ export interface Project {
   id: string;
   name: string;
   description: string;
+  /**
+   * Free-form project tags, stored as ONE comma-separated string (the
+   * metadata lifecycle is single-field PATCHes; a string needs no array
+   * merge rules). Optional: older projects and imports predate it.
+   */
+  tags?: string;
   createdAt: string;
   updatedAt: string;
   /** Per-project model pin; falls back to the global default when unset. */

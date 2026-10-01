@@ -12,6 +12,11 @@ process. Download zips: the
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-10-01
+
+Fifteenth release: project status — the fourth inline metadata surface,
+shipped by applying the freshly distilled recipe to itself.
+
 ### Added
 
 - Project status — the fourth inline metadata surface and the first
@@ -569,6 +574,7 @@ was superseded by the 0.2.0 bump before anything was ever published. No
 artifacts exist for this version; it is recorded here so the semver story
 stays honest.
 
+[0.10.0]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.10.0
 [0.9.0]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.9.0
 [0.8.0]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.8.0
 [0.7.0]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.7.0

@@ -145,7 +145,7 @@ export function ProjectCardTags({
         title="Edit tags"
         aria-label="Edit tags"
         data-testid="card-tags-button"
-        className="absolute right-0 top-0 text-xs text-neutral-600 opacity-0 transition group-hover:opacity-100 hover:text-neutral-400"
+        className="absolute right-0 top-0 text-xs text-neutral-600 opacity-0 transition hover:text-neutral-400 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:text-neutral-400 focus-visible:outline-none"
       >
         ✎
       </button>

@@ -16,7 +16,7 @@ later API queries (CI runs, artifacts).
 
 ## 1. PR shepherd (~10 min/cycle)
 
-The one true path for landing anything. Used for #43–#80 without a single
+The one true path for landing anything. Used for #43–#87 without a single
 failed landing once the payload-file rule was learned.
 
 ```bash
@@ -305,8 +305,7 @@ date-gated chains are `NOT_YET_DUE` before their first fire, never falsely
 dead. Findings → exit 1 + one deduped comment on #18 (8-day window);
 healthy → exit 0 silent. The heartbeat audits its own cron too, and excludes
 GitHub's synthetic `dynamic/dependabot/...` workflow entry (no file).
-Rehearse with the `dry_run` dispatch input; extend by adding crons — the
-auditor picks them up automatically.
+Rehearse with the `dry_run` dispatch input; extend by adding crons —the auditor picks them up automatically.
 
 **Landmines (each cost a debugging cycle once):** cron single values are
 single values — `53` is 53, not vixie 53-max (only `a/s` means `a-max/s`);
@@ -317,3 +316,54 @@ typo'd cron must be a FINDING (unsatisfiable), never a skip; and a
 day-after sentinel must stay meaningful when the chain is operator-in-the-
 loop — `SENTINEL_AWAITING_DISPATCH` is a reminder, not a malfunction, and
 the comment must say so.
+
+---
+
+## 7. Inline metadata editor (add a field surface)
+
+Three shipped surfaces — builder-header **name** (#77, blur/Enter commit),
+card **description** (#82, Save/Cancel), card **tags** (#85, Save/Cancel +
+pills) — all ride ONE shared layer: `src/components/inline-meta-edit.tsx`
+exports `useInlineMetaEdit({ projectId, field, initial, clientCap,
+savedToast, clearedToast? })` (draft lifecycle, busy guard, one-field
+PATCH to `/api/projects/[id]/meta`, **server-wins normalization**,
+changed-only commit, failure toasts keep the prior value) and
+`MetaEditButtons` (Save/Cancel row; per-surface test-id props so old
+suites survive refactors). Adding a FOURTH field = widen the hook's
+`field` union + the store's `setProjectMeta`/route type checks (the store
+is THE validator — client caps are UX-only) + a thin shell component.
+No shell should contain state-machine code; if it does, the layer is
+leaking (that was the bug class #84 killed).
+
+### The pattern (proven by the 2026-10-01 three-editor audit)
+
+1. **Commit semantics are caller-owned** — they differ per surface and
+   must not be forced into the hook: blur/Enter for the header name
+   (single-click rename; its blur would fight nothing), explicit
+   Save/Cancel for cards (a blur-commit fights the buttons — clicking
+   Save blurs first), Escape always cancels, Enter may commit where an
+   input is present.
+2. **The server is the only normalizer.** Client caps/trim are UX-only;
+   display what the PATCH response returned, never the draft. New field
+   shapes (like comma-separated tags) are normalized in `setProjectMeta`
+   and land in BOTH the UI and the export envelope through it.
+3. **Overlay contract for server-rendered surfaces.** Cards are `<Link>`s:
+   the editor renders as a SIBLING overlay inside a relative parent, stops
+   `click`/`keydown` at its boundary (editing must never navigate), and
+   reserved spacer slots keep the grid aligned in display mode.
+4. **Affordances must be keyboard-visible.** Hover-revealed controls need
+   `focus-visible:opacity-100` (the tags pencil shipped without it —
+   found by the audit).
+5. **Empty state is an affordance, filled state may be a feature** —
+   with no value, the whole area invites editing ("No tags" + Add);
+   once filled, functional elements (filter pills) own the area and the
+   pencil owns editing.
+6. **ToastHost is per-page** (module bus + portal). A mounted host renders
+   `null` when idle, so absence from the DOM is normal; toasts live 6s, so
+   automated probes must poll immediately after the commit (a slow probe
+   reads "no toast" — probe latency, not a defect).
+
+Verify with the per-surface suites (`tests/inline-meta-edit.test.tsx`,
+`tests/project-card-description.test.tsx`,
+`tests/project-card-tags.test.tsx`) — the behavior-preservation proof is
+existing suites passing UNCHANGED when the layer is refactored.

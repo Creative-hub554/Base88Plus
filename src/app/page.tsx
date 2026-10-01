@@ -9,11 +9,28 @@ import { ImportZipButton } from "@/components/import-button";
 import { ProjectCardDescription } from "@/components/project-card-description";
 import { ProjectCardTags } from "@/components/project-card-tags";
 import { ToastHost } from "@/components/toast";
+import { projectMatchesTag } from "@/lib/tags";
 
 export const dynamic = "force-dynamic";
 
-export default function HomePage() {
-  const projects = listProjects();
+/**
+ * The dashboard doubles as the tag filter: `/?tag=<tag>` narrows the grid
+ * server-side to projects carrying that tag (case-insensitive exact
+ * match), so a pill click on any card is a deep-linkable filter and the
+ * back button undoes it. No client state — the URL IS the state.
+ */
+export default async function HomePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tag?: string | string[] }>;
+}) {
+  const params = await searchParams;
+  const rawTag = params.tag;
+  const activeTag = (Array.isArray(rawTag) ? rawTag[0] : rawTag)?.trim() ?? "";
+  const allProjects = listProjects();
+  const projects = activeTag
+    ? allProjects.filter((p) => projectMatchesTag(p.tags, activeTag))
+    : allProjects;
   const publishedSlugs = new Map(
     projects
       .map((p) => [p.id, getPublishManifest(p.id)?.slug] as const)
@@ -71,7 +88,37 @@ export default function HomePage() {
         <h2 className="mb-4 text-sm font-medium uppercase tracking-wide text-neutral-500">
           Your apps
         </h2>
-        {projects.length === 0 ? (
+        {activeTag && (
+          <div
+            className="mb-4 flex flex-wrap items-center gap-2 text-sm text-neutral-400"
+            data-testid="tag-filter-bar"
+          >
+            <span>
+              {projects.length} project{projects.length === 1 ? "" : "s"} tagged{" "}
+              <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-200">
+                {activeTag}
+              </span>
+            </span>
+            <Link
+              href="/"
+              data-testid="tag-filter-clear"
+              className="rounded border border-neutral-800 px-2 py-0.5 text-xs text-neutral-300 transition hover:bg-neutral-900"
+            >
+              Clear ✕
+            </Link>
+          </div>
+        )}
+        {activeTag && projects.length === 0 ? (
+          <div
+            className="rounded-xl border border-dashed border-neutral-800 p-10 text-center text-neutral-500"
+            data-testid="tag-filter-empty"
+          >
+            No projects tagged “{activeTag}”.{" "}
+            <Link href="/" className="text-neutral-300 underline underline-offset-2">
+              Show all apps
+            </Link>
+          </div>
+        ) : projects.length === 0 ? (
           <div className="rounded-xl border border-dashed border-neutral-800 p-10 text-center text-neutral-500">
             No apps yet — create your first one and describe what you want to
             build.

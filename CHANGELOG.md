@@ -12,6 +12,16 @@ process. Download zips: the
 
 ## [Unreleased]
 
+### Added
+
+- Tag filtering on the dashboard — tags earn their keep: every tag on a
+  card is now a link to `/?tag=<tag>`, and the dashboard narrows the grid
+  server-side to projects carrying that tag (case-insensitive exact
+  match). The URL is the state — filters are deep-linkable and the back
+  button undoes them — with a filter bar (count + clear) and a
+  filtered-empty state. The pencil remains the tags-edit affordance once
+  tags exist; the whole-area click-to-edit stays for the empty state.
+
 ## [0.8.0] — 2026-10-01
 
 Thirteenth release: project tags — a third inline metadata editor on the

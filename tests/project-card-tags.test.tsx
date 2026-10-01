@@ -6,11 +6,45 @@
  * the server's normalized string (per-tag trim, comma-space join)
  * winning over the draft, clearing to the placeholder fallback,
  * Save/Cancel/Escape/Enter semantics, and failure toasts that revert.
+ *
+ * Tags are functional: each pill is a `/?tag=` filter link (deep-linkable
+ * server-side filter). Pins that pill clicks NEVER open the editor and
+ * carry the right href, while the pencil remains the edit trigger for
+ * non-empty cards (the whole-area affordance is empty-state only).
  */
+import React from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProjectCardTags } from "../src/components/project-card-tags";
 import { ToastHost, resetToasts } from "../src/components/toast";
+
+/** Plain-anchor stand-in for next/link (no app router in unit tests). */
+vi.mock("next/link", () => ({
+  default: (props: {
+    href: string;
+    children?: React.ReactNode;
+    className?: string;
+    title?: string;
+    "aria-label"?: string;
+    "data-testid"?: string;
+    onClick?: (e: { stopPropagation: () => void }) => void;
+  }) =>
+    React.createElement(
+      "a",
+      {
+        href: props.href,
+        className: props.className,
+        title: props.title,
+        "aria-label": props["aria-label"],
+        "data-testid": props["data-testid"],
+        onClick: (e: { preventDefault: () => void }) => {
+          props.onClick?.({ stopPropagation: () => {} });
+          e.preventDefault(); // keep jsdom from attempting real navigation
+        },
+      },
+      props.children,
+    ),
+}));
 
 type Wire = { url: string; method: string; body: unknown };
 
@@ -95,8 +129,14 @@ describe("ProjectCardTags (via useInlineMetaEdit)", () => {
     expect(lastWire?.url).toBe("/api/projects/p1/meta");
     expect(lastWire?.method).toBe("PATCH");
     expect(lastWire?.body).toEqual({ tags: "soup , , chili ,, bread" });
-    // The server's normalized value is the truth, not the local draft.
-    expect(screen.getByTestId("card-tags").textContent).toContain("recipes, fast, vegan");
+    // The server's normalized value is the truth, not the local draft —
+    // displayed as one filter pill per tag, each deep-linking the filter.
+    expect(
+      screen.getAllByTestId("card-tags-pill").map((p) => p.textContent),
+    ).toEqual(["recipes", "fast", "vegan"]);
+    expect(
+      screen.getAllByTestId("card-tags-pill").map((p) => p.getAttribute("href")),
+    ).toEqual(["/?tag=recipes", "/?tag=fast", "/?tag=vegan"]);
     expect(screen.getByTestId("toast-host").textContent).toContain("Tags updated.");
   });
 
@@ -127,7 +167,9 @@ describe("ProjectCardTags (via useInlineMetaEdit)", () => {
 
     expect(screen.getByTestId("card-tags")).toBeTruthy();
     expect(lastWire).toBeNull();
-    expect(screen.getByTestId("card-tags").textContent).toContain("recipes, fast");
+    expect(
+      screen.getAllByTestId("card-tags-pill").map((p) => p.textContent),
+    ).toEqual(["recipes", "fast"]);
 
     fireEvent.click(screen.getByTestId("card-tags-button"));
     fireEvent.change(screen.getByTestId("card-tags-input"), {
@@ -164,7 +206,9 @@ describe("ProjectCardTags (via useInlineMetaEdit)", () => {
       expect(screen.getByTestId("toast-host").textContent).toContain("Update failed"),
     );
     // Local state keeps the ORIGINAL tags — the failed draft is gone.
-    expect(screen.getByTestId("card-tags").textContent).toContain("recipes, fast");
+    expect(
+      screen.getAllByTestId("card-tags-pill").map((p) => p.textContent),
+    ).toEqual(["recipes", "fast"]);
   });
 
   it("uses the empty-state affordance text when there are no tags yet", () => {
@@ -172,5 +216,28 @@ describe("ProjectCardTags (via useInlineMetaEdit)", () => {
     const button = screen.getByTestId("card-tags-button");
     expect(button.textContent).toContain("No tags");
     expect(button.getAttribute("title")).toBe("Add tags");
+  });
+
+  it("renders one filter link per tag; a pill click never opens the editor", () => {
+    renderCard();
+    const pills = screen.getAllByTestId("card-tags-pill");
+    expect(pills.map((p) => p.textContent)).toEqual(["recipes", "fast"]);
+    // Deep-linkable server-side filter, one per stored tag.
+    expect(pills[0].getAttribute("href")).toBe("/?tag=recipes");
+    expect(pills[1].getAttribute("href")).toBe("/?tag=fast");
+    expect(pills[0].getAttribute("aria-label")).toBe(
+      "Filter projects by tag recipes",
+    );
+
+    // A pill is a filter, not an edit affordance: no editor, no fetch.
+    fireEvent.click(pills[0]);
+    expect(screen.queryByTestId("card-tags-input")).toBeNull();
+    expect(lastWire).toBeNull();
+
+    // The pencil is the edit trigger for non-empty cards.
+    const pencil = screen.getByTestId("card-tags-button");
+    expect(pencil.getAttribute("title")).toBe("Edit tags");
+    fireEvent.click(pencil);
+    expect(screen.getByTestId("card-tags-input")).toBeTruthy();
   });
 });

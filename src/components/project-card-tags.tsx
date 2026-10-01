@@ -1,6 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useInlineMetaEdit, MetaEditButtons } from "./inline-meta-edit";
+import { splitTags } from "@/lib/tags";
 
 /**
  * Inline project-tags editor on dashboard cards — the third metadata
@@ -18,6 +20,11 @@ import { useInlineMetaEdit, MetaEditButtons } from "./inline-meta-edit";
  * and keys are stopped at the boundary so editing never triggers the
  * card's navigation, and the commit is an explicit Save/Cancel pair
  * (Enter commits; a blur-commit would fight the buttons).
+ *
+ * TAGS ARE FUNCTIONAL: each rendered tag is a link to `/?tag=<tag>`, the
+ * dashboard's server-side filter. The whole-area click-to-edit affordance
+ * is kept only for the EMPTY state ("Add tags"); once tags exist, the
+ * pencil is the edit trigger and the pills filter.
  */
 export function ProjectCardTags({
   projectId,
@@ -79,8 +86,55 @@ export function ProjectCardTags({
     );
   }
 
+  const tags = splitTags(meta.value);
+
+  // Empty state: the whole area opens the editor (nothing to filter yet).
+  if (tags.length === 0) {
+    return (
+      <div className="group relative mt-1" data-testid="card-tags">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            meta.start();
+          }}
+          disabled={meta.busy}
+          title="Add tags"
+          data-testid="card-tags-button"
+          className="block w-full text-left"
+        >
+          <span className="line-clamp-1 pr-4 text-xs italic text-neutral-600">
+            {fallback}
+          </span>
+          <span
+            aria-hidden
+            className="absolute right-0 top-0 text-xs text-neutral-600 opacity-0 transition group-hover:opacity-100"
+          >
+            ✎
+          </span>
+        </button>
+      </div>
+    );
+  }
+
+  // Tags exist: pills filter the dashboard; the pencil edits.
   return (
     <div className="group relative mt-1" data-testid="card-tags">
+      <div className="flex items-center gap-1 overflow-hidden pr-5">
+        {tags.map((tag) => (
+          <Link
+            key={tag}
+            href={`/?tag=${encodeURIComponent(tag)}`}
+            onClick={(e) => e.stopPropagation()}
+            title={`Show projects tagged “${tag}”`}
+            aria-label={`Filter projects by tag ${tag}`}
+            data-testid="card-tags-pill"
+            className="whitespace-nowrap rounded bg-neutral-800 px-1.5 py-0.5 text-[11px] leading-4 text-neutral-300 transition hover:bg-neutral-700"
+          >
+            {tag}
+          </Link>
+        ))}
+      </div>
       <button
         type="button"
         onClick={(e) => {
@@ -88,21 +142,12 @@ export function ProjectCardTags({
           meta.start();
         }}
         disabled={meta.busy}
-        title={meta.value ? "Edit tags" : "Add tags"}
+        title="Edit tags"
+        aria-label="Edit tags"
         data-testid="card-tags-button"
-        className="block w-full text-left"
+        className="absolute right-0 top-0 text-xs text-neutral-600 opacity-0 transition group-hover:opacity-100 hover:text-neutral-400"
       >
-        <span
-          className={`line-clamp-1 pr-4 text-xs ${meta.value ? "text-neutral-400" : "italic text-neutral-600"}`}
-        >
-          {meta.value || fallback}
-        </span>
-        <span
-          aria-hidden
-          className="absolute right-0 top-0 text-xs text-neutral-600 opacity-0 transition group-hover:opacity-100"
-        >
-          ✎
-        </span>
+        ✎
       </button>
     </div>
   );

@@ -12,6 +12,11 @@ process. Download zips: the
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-10-01
+
+Fourteenth release: tags earn their keep — the dashboard doubles as the
+tag filter, and the metadata pattern gets its playbook.
+
 ### Added
 
 - Tag filtering on the dashboard — tags earn their keep: every tag on a
@@ -555,6 +560,7 @@ was superseded by the 0.2.0 bump before anything was ever published. No
 artifacts exist for this version; it is recorded here so the semver story
 stays honest.
 
+[0.9.0]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.9.0
 [0.8.0]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.8.0
 [0.7.0]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.7.0
 [0.6.0]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.6.0

@@ -37,6 +37,11 @@ vi.mock("next/link", () => ({
     ),
 }));
 
+/** The card shell owns a router for the board view's soft refresh. */
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
+}));
+
 type Wire = { url: string; method: string; body: unknown };
 
 let fetchResponse: () => Promise<Response>;

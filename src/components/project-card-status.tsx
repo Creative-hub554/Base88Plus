@@ -1,7 +1,8 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useInlineMetaEdit, MetaEditButtons } from "./inline-meta-edit";
-import { PROJECT_STATUSES, type ProjectStatus } from "@/lib/status";
+import { PROJECT_STATUSES, STATUS_DOT, type ProjectStatus } from "@/lib/status";
 
 /**
  * Inline project-status editor on dashboard cards — the FOURTH metadata
@@ -22,22 +23,27 @@ import { PROJECT_STATUSES, type ProjectStatus } from "@/lib/status";
  * Empty state: "No status" affordance opens the editor; once set, the
  * badge is the filter link and the pencil re-opens the editor (recipe 7
  * rule 5: filled state may be a feature).
+ *
+ * Board view passes `refreshAfterSave`: a commit triggers a soft server
+ * refresh so the card re-renders in its new column (the grid ignores it —
+ * the card never moves there).
  */
-
-const STATUS_DOT: Record<ProjectStatus, string> = {
-  idea: "bg-neutral-500",
-  building: "bg-amber-400",
-  shipped: "bg-emerald-400",
-};
 
 export function ProjectCardStatus({
   projectId,
   initialStatus,
   fallback = "No status",
+  refreshAfterSave = false,
 }: {
   projectId: string;
   initialStatus: string;
   fallback?: string;
+  /**
+   * Board view: a status change moves the card BETWEEN columns, which
+   * the server rendered — so after a successful save, re-fetch the page
+   * server-side (soft refresh; no full reload, scroll kept).
+   */
+  refreshAfterSave?: boolean;
 }) {
   const meta = useInlineMetaEdit({
     projectId,
@@ -47,6 +53,13 @@ export function ProjectCardStatus({
     savedToast: (value) => `Status set to ${value}.`,
     clearedToast: () => "Status cleared.",
   });
+  const router = useRouter();
+
+  const commitAndMaybeRefresh = () => {
+    void meta.commit().then(() => {
+      if (refreshAfterSave) router.refresh();
+    });
+  };
 
   if (meta.editing) {
     return (
@@ -80,7 +93,7 @@ export function ProjectCardStatus({
         </select>
         <MetaEditButtons
           busy={meta.busy}
-          onSave={() => void meta.commit()}
+          onSave={commitAndMaybeRefresh}
           onCancel={meta.cancel}
           saveTestId="card-status-save"
           cancelTestId="card-status-cancel"

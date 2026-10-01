@@ -12,6 +12,18 @@ process. Download zips: the
 
 ## [Unreleased]
 
+### Added
+
+- Status board view on the dashboard — `/?view=board` swaps the grid for
+  three status columns (idea / building / shipped), each with a live
+  count and the shared status dot. The Grid/Board toggle is a link (the
+  URL is the state, same as the filters) and preserves an active
+  tag/status filter; unstatused projects keep a home in a trailing
+  "No status" column; and a status save on a board card soft-refreshes
+  the page so the card re-sorts into its new column. The card markup
+  moved into one shared `ProjectCard` with `grid` and `board` layouts —
+  the grid renders identically.
+
 ## [0.10.0] — 2026-10-01
 
 Fifteenth release: project status — the fourth inline metadata surface,

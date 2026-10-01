@@ -33,3 +33,13 @@ export function statusMatches(
   if (!needle) return false;
   return typeof raw === "string" && raw.trim().toLowerCase() === needle;
 }
+
+/**
+ * Dot color per status — shared by the card badge and the board column
+ * headers so a status looks the same everywhere.
+ */
+export const STATUS_DOT: Record<ProjectStatus, string> = {
+  idea: "bg-neutral-500",
+  building: "bg-amber-400",
+  shipped: "bg-emerald-400",
+};

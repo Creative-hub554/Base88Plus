@@ -1,26 +1,38 @@
 import Link from "next/link";
 import { getProjectModelInfo } from "@/lib/providers/gateway";
 import {
-  getGenerationHealth,
   getPublishManifest,
   listProjects,
 } from "@/lib/store";
 import { ImportZipButton } from "@/components/import-button";
-import { ProjectCardDescription } from "@/components/project-card-description";
-import { ProjectCardTags } from "@/components/project-card-tags";
-import { ProjectCardStatus } from "@/components/project-card-status";
+import { ProjectCard } from "@/components/project-card";
 import { ToastHost } from "@/components/toast";
 import { projectMatchesTag } from "@/lib/tags";
-import { statusMatches } from "@/lib/status";
+import type { Project } from "@/lib/types";
+import {
+  PROJECT_STATUSES,
+  STATUS_DOT,
+  isProjectStatus,
+  statusMatches,
+  type ProjectStatus,
+} from "@/lib/status";
 
 export const dynamic = "force-dynamic";
 
 /**
  * The dashboard doubles as the metadata filter: `/?tag=<tag>` and
- * `/?status=<status>` narrow the grid server-side (case-insensitive
+ * `/?status=<status>` narrow the view server-side (case-insensitive
  * exact matches, ANDed when both are present), so a pill/badge click on
  * any card is a deep-linkable filter and the back button undoes it. No
  * client state — the URL IS the state.
+ *
+ * `/?view=board` swaps the grid for a three-column status board
+ * (idea / building / shipped). It is a VIEW over the same filtered
+ * project set — tag and status filters apply identically in both views.
+ * Projects without a status land in a trailing "No status" column rather
+ * than vanishing (the board answers "what's where"; hiding projects
+ * would lie). A status edit on a board card soft-refreshes the page so
+ * the card re-sorts into its new column.
  */
 export default async function HomePage({
   searchParams,
@@ -28,6 +40,7 @@ export default async function HomePage({
   searchParams: Promise<{
     tag?: string | string[];
     status?: string | string[];
+    view?: string | string[];
   }>;
 }) {
   const params = await searchParams;
@@ -36,6 +49,12 @@ export default async function HomePage({
   const rawStatus = params.status;
   const activeStatus =
     (Array.isArray(rawStatus) ? rawStatus[0] : rawStatus)?.trim() ?? "";
+  const rawView = params.view;
+  const activeView =
+    (Array.isArray(rawView) ? rawView[0] : rawView)?.trim() ?? "";
+  // Anything that is not exactly "board" renders the default grid, so
+  // hand-typed junk URLs can never produce a half-initialized layout.
+  const boardView = activeView === "board";
   const allProjects = listProjects();
   const projects = allProjects.filter(
     (p) =>
@@ -43,16 +62,48 @@ export default async function HomePage({
       (!activeStatus || statusMatches(p.status, activeStatus)),
   );
   const hasFilter = Boolean(activeTag || activeStatus);
-  const publishedSlugs = new Map(
-    projects
-      .map((p) => [p.id, getPublishManifest(p.id)?.slug] as const)
-      .filter(([, slug]) => Boolean(slug)),
-  );
+
   // Effective model per project (pin or global default) comes from the
-  // gateway's own resolver — never re-derived here.
+  // gateway's own resolver — never re-derived here. Only the grid's
+  // generation-health line consumes it.
   const modelByProject = new Map(
     getProjectModelInfo().map((pj) => [pj.projectId, pj] as const),
   );
+
+  // Board grouping: the three enum columns are always present (an empty
+  // column is information — "nothing is building"), and unstatused
+  // projects get a trailing "No status" column only when one exists.
+  const boardColumns: {
+    status: ProjectStatus | undefined;
+    label: string;
+    projects: Project[];
+  }[] = PROJECT_STATUSES.map((status) => ({
+    status,
+    label: status,
+    projects: projects.filter((p) => statusMatches(p.status, status)),
+  }));
+  const unstatused = projects.filter(
+    (p) => !(p.status && isProjectStatus(p.status)),
+  );
+  if (unstatused.length > 0) {
+    boardColumns.push({
+      status: undefined,
+      label: "No status",
+      projects: unstatused,
+    });
+  }
+
+  // The toggle preserves an active filter (board + ?tag= is a valid deep
+  // link). The grid link stays plain "/" when unfiltered so it doubles
+  // as the filter-clear; the board link always carries view=board.
+  const filterQs = [
+    activeTag && `tag=${encodeURIComponent(activeTag)}`,
+    activeStatus && `status=${encodeURIComponent(activeStatus)}`,
+  ]
+    .filter(Boolean)
+    .join("&");
+  const gridHref = filterQs ? `/?${filterQs}` : "/";
+  const boardHref = filterQs ? `/?${filterQs}&view=board` : "/?view=board";
 
   return (
     <main className="mx-auto max-w-5xl px-6 py-16">
@@ -97,9 +148,40 @@ export default async function HomePage({
       </section>
 
       <section>
-        <h2 className="mb-4 text-sm font-medium uppercase tracking-wide text-neutral-500">
-          Your apps
-        </h2>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-medium uppercase tracking-wide text-neutral-500">
+            Your apps
+          </h2>
+          <div
+            className="flex items-center gap-1 rounded-lg border border-neutral-800 p-0.5"
+            data-testid="view-toggle"
+          >
+            <Link
+              href={gridHref}
+              data-testid="view-grid-link"
+              aria-current={boardView ? undefined : "page"}
+              className={`rounded-md px-2.5 py-1 text-xs transition ${
+                boardView
+                  ? "text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200"
+                  : "bg-neutral-800 text-white"
+              }`}
+            >
+              Grid
+            </Link>
+            <Link
+              href={boardHref}
+              data-testid="view-board-link"
+              aria-current={boardView ? "page" : undefined}
+              className={`rounded-md px-2.5 py-1 text-xs transition ${
+                boardView
+                  ? "bg-neutral-800 text-white"
+                  : "text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200"
+              }`}
+            >
+              Board
+            </Link>
+          </div>
+        </div>
         {hasFilter && (
           <div
             className="mb-4 flex flex-wrap items-center gap-2 text-sm text-neutral-400"
@@ -152,75 +234,53 @@ export default async function HomePage({
             No apps yet — create your first one and describe what you want to
             build.
           </div>
+        ) : boardView ? (
+          <div
+            className="grid grid-cols-1 gap-4 sm:grid-cols-3"
+            data-testid="board"
+          >
+            {boardColumns.map((col) => (
+              <div
+                key={col.label}
+                className="min-w-0"
+                data-testid={`board-column-${col.status ?? "none"}`}
+              >
+                <div className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-neutral-400">
+                  {col.status && (
+                    <span
+                      aria-hidden
+                      className={`inline-block h-1.5 w-1.5 rounded-full ${STATUS_DOT[col.status]}`}
+                    />
+                  )}
+                  <span>
+                    {col.label}{" "}
+                    <span className="text-neutral-600">
+                      ({col.projects.length})
+                    </span>
+                  </span>
+                </div>
+                <ul className="space-y-2">
+                  {col.projects.map((p) => (
+                    <ProjectCard
+                      key={p.id}
+                      project={p}
+                      layout="board"
+                      published={Boolean(getPublishManifest(p.id)?.slug)}
+                    />
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
         ) : (
           <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {projects.map((p) => (
-              <li key={p.id} className="relative">
-                <Link
-                  href={`/app/${p.id}`}
-                  className="block rounded-xl border border-neutral-800 p-4 pb-10 transition hover:border-neutral-600 hover:bg-neutral-900"
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="font-medium text-white">{p.name}</div>
-                    {publishedSlugs.get(p.id) && (
-                      <span className="flex items-center gap-1 rounded-md bg-emerald-950 px-1.5 py-0.5 text-[10px] text-emerald-400">
-                        <span className="h-1 w-1 rounded-full bg-emerald-400" />
-                        public
-                      </span>
-                    )}
-                  </div>
-                  {/* The description slot is reserved here; the editable
-                      overlay renders on top of it as a SIBLING so the card
-                      link and the editor's controls never nest. The tags
-                      editor stacks below it in the same overlay. */}
-                  <div className="mt-1 h-10" aria-hidden />
-                  <div className="h-5" aria-hidden />
-                  <div className="h-5" aria-hidden />
-                  <div className="mt-2 text-xs text-neutral-600">
-                    Updated{" "}
-                    {new Date(p.updatedAt).toLocaleString(undefined, {
-                      dateStyle: "medium",
-                      timeStyle: "short",
-                    })}
-                  </div>
-                  {(() => {
-                    const model = modelByProject.get(p.id);
-                    const health = getGenerationHealth(p.id);
-                    if (!model || !health) return null;
-                    const pct = Math.round(health.successRate * 100);
-                    return (
-                      <div
-                        className="mt-1.5 flex items-center gap-1.5 text-[11px] text-neutral-500"
-                        data-testid="generation-health"
-                      >
-                        <span
-                          className={`inline-block h-1.5 w-1.5 rounded-full ${
-                            pct >= 80
-                              ? "bg-emerald-400"
-                              : pct >= 50
-                                ? "bg-amber-400"
-                                : "bg-red-400"
-                          }`}
-                          aria-hidden
-                        />
-                        <span title={`${health.turns} generation turn(s), ${health.degenerateTurns} unrecoverable`}>
-                          <span className="font-mono text-neutral-400">{model.modelId}</span>
-                          {" · "}
-                          {pct}% ok · {health.avgRetries.toFixed(1)} retries/turn
-                        </span>
-                      </div>
-                   );
-                  })()}
-                </Link>
-                <div className="absolute inset-x-4 top-10">
-                  <ProjectCardDescription
-                    projectId={p.id}
-                    initialDescription={p.description}
-                  />
-                  <ProjectCardTags projectId={p.id} initialTags={p.tags ?? ""} />
-                  <ProjectCardStatus projectId={p.id} initialStatus={p.status ?? ""} />
-                </div>
-              </li>
+              <ProjectCard
+                key={p.id}
+                project={p}
+                published={Boolean(getPublishManifest(p.id)?.slug)}
+                modelId={modelByProject.get(p.id)?.modelId}
+              />
             ))}
           </ul>
         )}

@@ -28,7 +28,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import JSZip from "jszip";
-import { BINARY_EXTENSIONS, createProject, saveAppFile } from "./store";
+import { BINARY_EXTENSIONS, createProject, saveAppFile, setProjectMeta } from "./store";
 import type { Project, ProjectFile } from "./types";
 
 /** Key of the metadata envelope inside an anybase export zip. */
@@ -175,6 +175,8 @@ export interface ImportOptions {
 export interface ExportMeta {
   name?: string;
   description?: string;
+  /** One comma-separated string (the store's tags shape). */
+  tags?: string;
   /** Marker of an anybase export envelope (as opposed to an app file). */
   anybase?: unknown;
 }
@@ -231,6 +233,12 @@ export async function importFromEntries(
       (typeof meta?.description === "string" ? meta.description : "") ||
       "",
   );
+  // Envelope tags ride the same server-wins path as an inline edit: the
+  // store splits/trims/dedupes-separators and returns the persisted shape
+  // (createProject has no tags parameter, so this is the ONE validator).
+  if (typeof meta?.tags === "string" && meta.tags.trim()) {
+    project.tags = setProjectMeta(project.id, { tags: meta.tags }).tags;
+  }
   const imported: ProjectFile[] = [];
   const skipped: ImportSkipped[] = [];
   const seen = new Set<string>();

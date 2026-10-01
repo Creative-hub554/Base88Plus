@@ -87,6 +87,51 @@ describe("project meta — store kernel (setProjectMeta)", () => {
     expect(cleared.name).toBe("App");
   });
 
+  it("tags in place: split, per-tag trim, empties dropped, comma-space join", async () => {
+    const { store } = await fresh();
+    const p = store.createProject("App", "");
+    const before = p.updatedAt;
+    await new Promise((r) => setTimeout(r, 5)); // ensure the timestamp moves
+
+    const updated = store.setProjectMeta(p.id, { tags: "  recipes ,  , fast ,, vegan  " });
+    expect(updated.tags).toBe("recipes, fast, vegan");
+    expect(updated.updatedAt).not.toBe(before); // a tag edit is a meta edit
+
+    // Persisted: a fresh read sees the tags.
+    const onDisk = JSON.parse(
+      fs.readFileSync(
+        path.join(process.cwd(), "projects-data", p.id, "project.json"),
+        "utf8",
+      ),
+    );
+    expect(onDisk.tags).toBe("recipes, fast, vegan");
+  });
+
+  it("clearing tags removes the field entirely; separators-only tags nothing", async () => {
+    const { store } = await fresh();
+    const p = store.createProject("App", "");
+    store.setProjectMeta(p.id, { tags: "a, b" });
+    expect(store.getProject(p.id)?.tags).toBe("a, b");
+
+    // All-separator input normalizes to nothing: the field disappears
+    // instead of lingering as an empty string.
+    const cleared = store.setProjectMeta(p.id, { tags: " , ,,  " });
+    expect(cleared.tags).toBeUndefined();
+    expect(JSON.parse(
+      fs.readFileSync(
+        path.join(process.cwd(), "projects-data", p.id, "project.json"),
+        "utf8",
+      ),
+    )).not.toHaveProperty("tags");
+  });
+
+  it("caps tags at META_TAGS_MAX (server normalization wins over the draft)", async () => {
+    const { store } = await fresh();
+    const p = store.createProject("App", "");
+    const long = store.setProjectMeta(p.id, { tags: `  ${"t".repeat(200)}  ` });
+    expect(long.tags!.length).toBe(store.META_TAGS_MAX);
+  });
+
   it("rejects an empty name and unknown projects; caps overlong values", async () => {
     const { store } = await fresh();
     const p = store.createProject("App", "");
@@ -149,9 +194,21 @@ describe("project meta — PATCH route contract", () => {
     expect((await patch(p.id, {})).status).toBe(400);
     expect((await patch(p.id, { name: 42 })).status).toBe(400);
     expect((await patch(p.id, { description: true })).status).toBe(400);
+    expect((await patch(p.id, { tags: ["a", "b"] })).status).toBe(400);
     expect((await patch(p.id, { name: "   " })).status).toBe(400);
     // Nothing was written by any of those.
     expect(store.getProject(p.id)?.name).toBe("App");
+  });
+
+  it("200: tags-only update keeps the name and stores the normalized string", async () => {
+    const { store } = await fresh();
+    const p = store.createProject("App", "old");
+    const res = await patch(p.id, { tags: " x ,, y " });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.project.name).toBe("App");
+    expect(data.project.tags).toBe("x, y");
+    expect(store.getProject(p.id)?.tags).toBe("x, y");
   });
 
   it("404: unknown project — and nothing is created by PATCHing it", async () => {
@@ -189,10 +246,11 @@ describe("project meta — metadata lifecycle round-trip", () => {
     );
     const export1 = Buffer.from(await res1.arrayBuffer());
 
-    // Rename through the REAL route.
+    // Rename through the REAL route — tags ride the same meta patch.
     const res2 = await patch(original.id, {
       name: "Renamed App",
       description: "v2 wording",
+      tags: "pinned, round-trip",
     });
     expect(res2.status).toBe(200);
 
@@ -209,6 +267,9 @@ describe("project meta — metadata lifecycle round-trip", () => {
     expect(import1.project.description).toBe("v1 wording");
     expect(import2.project.name).toBe("Renamed App");
     expect(import2.project.description).toBe("v2 wording");
+    // Tags survive the envelope round-trip in the store's normalized shape.
+    expect(import2.project.tags).toBe("pinned, round-trip");
+    expect(store.getProject(import2.project.id)?.tags).toBe("pinned, round-trip");
     // Fresh ids, original files intact.
     expect(import2.project.id).not.toBe(original.id);
     expect(store.readAppFile(import2.project.id, "index.html")).toContain("hello");

@@ -4,12 +4,15 @@ import { getProject, setProjectMeta } from "@/lib/store";
 /**
  * PATCH /api/projects/[projectId]/meta
  *
- * Rename + describe a project in place. The store function (`setProjectMeta`)
- * is THE validator and returns the persisted record; this route adds only
- * the transport concerns: JSON parsing, the at-least-one-field contract, and
- * shape checks so the store receives only strings.
+ * Rename + describe + tag a project in place. The store function
+ * (`setProjectMeta`) is THE validator and returns the persisted record;
+ * this route adds only the transport concerns: JSON parsing, the
+ * at-least-one-field contract, and shape checks so the store receives
+ * only strings.
  *
- * Body: { name?: string, description?: string } — at least one required.
+ * Body: { name?: string, description?: string, tags?: string } — at least
+ * one required. Tags are one comma-separated string; the store trims per
+ * tag, drops empties, and stores them joined with ", ".
  * 200 → { project }  full updated record (updatedAt bumped by the store)
  * 400 → { error }    bad JSON / empty patch / wrong types
  * 404 → { error }    unknown project
@@ -30,9 +33,13 @@ export async function PATCH(
   } catch {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
-  const patch = (body ?? {}) as { name?: unknown; description?: unknown };
+  const patch = (body ?? {}) as {
+    name?: unknown;
+    description?: unknown;
+    tags?: unknown;
+  };
 
-  const patchShape: { name?: string; description?: string } = {};
+  const patchShape: { name?: string; description?: string; tags?: string } = {};
   if (patch.name !== undefined) {
     if (typeof patch.name !== "string") {
       return Response.json({ error: "name must be a string" }, { status: 400 });
@@ -45,9 +52,19 @@ export async function PATCH(
     }
     patchShape.description = patch.description;
   }
-  if (patchShape.name === undefined && patchShape.description === undefined) {
+  if (patch.tags !== undefined) {
+    if (typeof patch.tags !== "string") {
+      return Response.json({ error: "tags must be a string" }, { status: 400 });
+    }
+    patchShape.tags = patch.tags;
+  }
+  if (
+    patchShape.name === undefined &&
+    patchShape.description === undefined &&
+    patchShape.tags === undefined
+  ) {
     return Response.json(
-      { error: "Provide name and/or description to update" },
+      { error: "Provide name, description, and/or tags to update" },
       { status: 400 },
     );
   }

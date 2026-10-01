@@ -9,7 +9,7 @@ import { notify } from "./toast";
  * and whatever field comes next). One place owns THE rules:
  *
  * - the PATCH goes to `/api/projects/[projectId]/meta` with exactly one
- *   field key (`name` or `description`) — never both;
+ *   field key (`name`, `description`, or `tags`) — never more than one;
  * - the server is THE validator: the client cap is UX-only, and the
  *   committed value is whatever the server normalized;
  * - failures toast danger and leave the previous value in place;
@@ -26,12 +26,17 @@ import { notify } from "./toast";
 export interface MetaEditResult {
   name?: string;
   description?: string;
+  tags?: string;
 }
 
 export function useInlineMetaEdit(options: {
   projectId: string;
-  /** The single meta field this editor owns: "name" | "description". */
-  field: "name" | "description";
+  /**
+   * The single meta field this editor owns. Values are plain strings on
+   * the wire — `tags` is one comma-separated string the store splits,
+   * trims per tag, and re-joins.
+   */
+  field: "name" | "description" | "tags";
   /** Current persisted value (server truth); kept in local state. */
   initial: string;
   /** UX-only cap applied to the draft before sending. */

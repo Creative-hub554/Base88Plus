@@ -12,7 +12,16 @@ process. Download zips: the
 
 ## [Unreleased]
 
-## [Unreleased]
+### Added
+
+- Project tags: a third inline metadata editor on the dashboard cards —
+  one comma-separated string, stored normalized (per-tag trim, empties
+  dropped) by the same meta route and store validator as name and
+  description, and carried by the export/import envelope so tags
+  survive a round-trip. Built as a thin shell over the shared
+  `useInlineMetaEdit` layer, so the new surface shares the wire
+  contract, server-wins normalization, and failure handling with the
+  name and description editors.
 
 ### Changed
 

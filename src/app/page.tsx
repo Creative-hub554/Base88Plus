@@ -7,6 +7,7 @@ import {
 } from "@/lib/store";
 import { ImportZipButton } from "@/components/import-button";
 import { ProjectCardDescription } from "@/components/project-card-description";
+import { ProjectCardTags } from "@/components/project-card-tags";
 import { ToastHost } from "@/components/toast";
 
 export const dynamic = "force-dynamic";
@@ -94,8 +95,10 @@ export default function HomePage() {
                   </div>
                   {/* The description slot is reserved here; the editable
                       overlay renders on top of it as a SIBLING so the card
-                      link and the editor's controls never nest. */}
+                      link and the editor's controls never nest. The tags
+                      editor stacks below it in the same overlay. */}
                   <div className="mt-1 h-10" aria-hidden />
+                  <div className="h-5" aria-hidden />
                   <div className="mt-2 text-xs text-neutral-600">
                     Updated{" "}
                     {new Date(p.updatedAt).toLocaleString(undefined, {
@@ -137,6 +140,7 @@ export default function HomePage() {
                     projectId={p.id}
                     initialDescription={p.description}
                   />
+                  <ProjectCardTags projectId={p.id} initialTags={p.tags ?? ""} />
                 </div>
               </li>
             ))}

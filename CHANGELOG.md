@@ -12,6 +12,13 @@ process. Download zips: the
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-10-01
+
+Thirteenth release: project tags — a third inline metadata editor on the
+dashboard cards, shipped as a thin shell over the shared meta-edit layer
+so the extraction from #84 pays for itself — and the shared layer itself
+now covers every inline editor.
+
 ### Added
 
 - Project tags: a third inline metadata editor on the dashboard cards —
@@ -538,6 +545,7 @@ was superseded by the 0.2.0 bump before anything was ever published. No
 artifacts exist for this version; it is recorded here so the semver story
 stays honest.
 
+[0.8.0]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.8.0
 [0.7.0]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.7.0
 [0.6.0]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.6.0
 [0.5.0]: https://github.com/Creative-hub554/Base88Plus/releases/tag/v0.5.0

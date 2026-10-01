@@ -17,6 +17,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { projectMatchesTag, splitTags } from "../src/lib/tags";
+import { statusMatches } from "../src/lib/status";
 
 /** Plain-anchor stand-in for next/link (no app router in unit tests). */
 vi.mock("next/link", () => ({
@@ -58,16 +59,20 @@ afterEach(() => {
 });
 
 /** Seed three projects (two tagged, one not) and render the dashboard. */
-async function renderSeeded(tag?: string) {
+async function renderSeeded(
+  filter?: { tag?: string; status?: string },
+) {
   const store = await import("../src/lib/store");
   const { default: HomePage } = await import("../src/app/page");
   const alpha = store.createProject("Alpha App", "first");
-  store.setProjectMeta(alpha.id, { tags: "recipes, fast" });
+  store.setProjectMeta(alpha.id, { tags: "recipes, fast", status: "shipped" });
   const beta = store.createProject("Beta App", "second");
-  store.setProjectMeta(beta.id, { tags: "slow" });
+  store.setProjectMeta(beta.id, { tags: "slow", status: "building" });
   store.createProject("Gamma App", "");
   const ui = await HomePage({
-    searchParams: Promise.resolve(tag === undefined ? {} : { tag }),
+    searchParams: Promise.resolve(
+      filter === undefined ? {} : { tag: filter.tag, status: filter.status },
+    ),
   });
   render(ui);
 }
@@ -90,6 +95,15 @@ describe("tag helpers (shared by server filter and card pills)", () => {
     expect(projectMatchesTag(undefined, "recipes")).toBe(false);
     expect(projectMatchesTag("recipes", "   ")).toBe(false);
   });
+
+  it("statusMatches mirrors the same contract for the enum value", () => {
+    expect(statusMatches("shipped", "shipped")).toBe(true);
+    expect(statusMatches("shipped", "SHIPPED")).toBe(true);
+    expect(statusMatches(" shipped ", " shipped ")).toBe(true);
+    expect(statusMatches("shipped", "building")).toBe(false);
+    expect(statusMatches(undefined, "shipped")).toBe(false);
+    expect(statusMatches("shipped", "  ")).toBe(false);
+  });
 });
 
 describe("HomePage tag filter", () => {
@@ -102,7 +116,7 @@ describe("HomePage tag filter", () => {
   });
 
   it("?tag= narrows the grid server-side and shows the filter bar", async () => {
-    await renderSeeded("recipes");
+    await renderSeeded({ tag: "recipes" });
     expect(screen.getByText("Alpha App")).toBeTruthy();
     expect(screen.queryByText("Beta App")).toBeNull();
     expect(screen.queryByText("Gamma App")).toBeNull();
@@ -116,21 +130,49 @@ describe("HomePage tag filter", () => {
   });
 
   it("matches case-insensitively (hand-typed URLs are forgiving)", async () => {
-    await renderSeeded("RECIPES");
+    await renderSeeded({ tag: "RECIPES" });
     expect(screen.getByText("Alpha App")).toBeTruthy();
     expect(screen.queryByText("Beta App")).toBeNull();
   });
 
   it("zero matches: filtered-empty state with a way back", async () => {
-    await renderSeeded("ghost");
+    await renderSeeded({ tag: "ghost" });
     expect(screen.getByTestId("tag-filter-empty")).toBeTruthy();
     expect(screen.queryByText("Alpha App")).toBeNull();
     const back = screen.getByText("Show all apps");
     expect(back.getAttribute("href")).toBe("/");
   });
 
+  it("?status= narrows to projects with that status", async () => {
+    await renderSeeded({ status: "building" });
+    expect(screen.getByText("Beta App")).toBeTruthy();
+    expect(screen.queryByText("Alpha App")).toBeNull();
+    expect(screen.queryByText("Gamma App")).toBeNull();
+    const bar = screen.getByTestId("tag-filter-bar");
+    expect(bar.textContent).toContain("1 project");
+    expect(bar.textContent).toContain("building");
+  });
+
+  it("tag + status filter AND together", async () => {
+    await renderSeeded({ tag: "slow", status: "building" });
+    expect(screen.getByText("Beta App")).toBeTruthy();
+    expect(screen.queryByText("Alpha App")).toBeNull();
+
+    // The same tag with a conflicting status: nothing matches.
+    await cleanup();
+    await renderSeeded({ tag: "slow", status: "shipped" });
+    expect(screen.getByTestId("tag-filter-empty")).toBeTruthy();
+  });
+
+  it("every filtered card carries a status badge deep-linking the same filter", async () => {
+    await renderSeeded({ status: "shipped" });
+    expect(screen.getByText("Alpha App")).toBeTruthy();
+    const badge = screen.getByTestId("card-status-badge");
+    expect(badge.getAttribute("href")).toBe("/?status=shipped");
+  });
+
   it("filtered cards keep their pills, deep-linking the same filter", async () => {
-    await renderSeeded("fast");
+    await renderSeeded({ tag: "fast" });
     expect(screen.getByText("Alpha App")).toBeTruthy();
     expect(screen.queryByText("Beta App")).toBeNull();
     expect(

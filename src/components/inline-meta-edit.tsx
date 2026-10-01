@@ -27,6 +27,7 @@ export interface MetaEditResult {
   name?: string;
   description?: string;
   tags?: string;
+  status?: string;
 }
 
 export function useInlineMetaEdit(options: {
@@ -34,9 +35,10 @@ export function useInlineMetaEdit(options: {
   /**
    * The single meta field this editor owns. Values are plain strings on
    * the wire — `tags` is one comma-separated string the store splits,
-   * trims per tag, and re-joins.
+   * trims per tag, and re-joins; `status` is an enum value the store
+   * validates against PROJECT_STATUSES.
    */
-  field: "name" | "description" | "tags";
+  field: "name" | "description" | "tags" | "status";
   /** Current persisted value (server truth); kept in local state. */
   initial: string;
   /** UX-only cap applied to the draft before sending. */

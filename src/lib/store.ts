@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ASSET_EXTENSIONS, isAssetPath } from "./asset-extensions";
+import { isProjectStatus, PROJECT_STATUSES } from "./status";
+
+/** Re-exported for consumers (tests, routes) that talk to the store only. */
+export { PROJECT_STATUSES };
 import type {
   BuilderUIMessage,
   CustomDomain,
@@ -259,7 +263,12 @@ export const META_TAGS_MAX = 120;
  */
 export function setProjectMeta(
   projectId: string,
-  patch: { name?: string; description?: string; tags?: string },
+  patch: {
+    name?: string;
+    description?: string;
+    tags?: string;
+    status?: string;
+  },
 ): Project {
   const p = getProject(projectId);
   if (!p) throw new Error("Project not found");
@@ -279,6 +288,15 @@ export function setProjectMeta(
       .join(", ");
     if (tags) p.tags = tags.slice(0, META_TAGS_MAX);
     else delete p.tags;
+  }
+  if (patch.status !== undefined) {
+    const status = patch.status.trim();
+    if (!isProjectStatus(status)) {
+      throw new Error(
+        `Invalid status — must be one of: ${PROJECT_STATUSES.join(", ")}`,
+      );
+    }
+    p.status = status;
   }
   p.updatedAt = new Date().toISOString();
   fs.writeFileSync(

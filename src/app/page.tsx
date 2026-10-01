@@ -8,29 +8,41 @@ import {
 import { ImportZipButton } from "@/components/import-button";
 import { ProjectCardDescription } from "@/components/project-card-description";
 import { ProjectCardTags } from "@/components/project-card-tags";
+import { ProjectCardStatus } from "@/components/project-card-status";
 import { ToastHost } from "@/components/toast";
 import { projectMatchesTag } from "@/lib/tags";
+import { statusMatches } from "@/lib/status";
 
 export const dynamic = "force-dynamic";
 
 /**
- * The dashboard doubles as the tag filter: `/?tag=<tag>` narrows the grid
- * server-side to projects carrying that tag (case-insensitive exact
- * match), so a pill click on any card is a deep-linkable filter and the
- * back button undoes it. No client state — the URL IS the state.
+ * The dashboard doubles as the metadata filter: `/?tag=<tag>` and
+ * `/?status=<status>` narrow the grid server-side (case-insensitive
+ * exact matches, ANDed when both are present), so a pill/badge click on
+ * any card is a deep-linkable filter and the back button undoes it. No
+ * client state — the URL IS the state.
  */
 export default async function HomePage({
   searchParams,
 }: {
-  searchParams: Promise<{ tag?: string | string[] }>;
+  searchParams: Promise<{
+    tag?: string | string[];
+    status?: string | string[];
+  }>;
 }) {
   const params = await searchParams;
   const rawTag = params.tag;
   const activeTag = (Array.isArray(rawTag) ? rawTag[0] : rawTag)?.trim() ?? "";
+  const rawStatus = params.status;
+  const activeStatus =
+    (Array.isArray(rawStatus) ? rawStatus[0] : rawStatus)?.trim() ?? "";
   const allProjects = listProjects();
-  const projects = activeTag
-    ? allProjects.filter((p) => projectMatchesTag(p.tags, activeTag))
-    : allProjects;
+  const projects = allProjects.filter(
+    (p) =>
+      (!activeTag || projectMatchesTag(p.tags, activeTag)) &&
+      (!activeStatus || statusMatches(p.status, activeStatus)),
+  );
+  const hasFilter = Boolean(activeTag || activeStatus);
   const publishedSlugs = new Map(
     projects
       .map((p) => [p.id, getPublishManifest(p.id)?.slug] as const)
@@ -88,16 +100,29 @@ export default async function HomePage({
         <h2 className="mb-4 text-sm font-medium uppercase tracking-wide text-neutral-500">
           Your apps
         </h2>
-        {activeTag && (
+        {hasFilter && (
           <div
             className="mb-4 flex flex-wrap items-center gap-2 text-sm text-neutral-400"
             data-testid="tag-filter-bar"
           >
             <span>
-              {projects.length} project{projects.length === 1 ? "" : "s"} tagged{" "}
-              <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-200">
-                {activeTag}
-              </span>
+              {projects.length} project{projects.length === 1 ? "" : "s"}
+              {activeTag && (
+                <>
+                  {" "}tagged{" "}
+                  <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-200">
+                    {activeTag}
+                  </span>
+                </>
+              )}
+              {activeStatus && (
+                <>
+                  {" "}· status{" "}
+                  <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-200">
+                    {activeStatus}
+                  </span>
+                </>
+              )}
             </span>
             <Link
               href="/"
@@ -108,12 +133,16 @@ export default async function HomePage({
             </Link>
           </div>
         )}
-        {activeTag && projects.length === 0 ? (
+        {hasFilter && projects.length === 0 ? (
           <div
             className="rounded-xl border border-dashed border-neutral-800 p-10 text-center text-neutral-500"
             data-testid="tag-filter-empty"
           >
-            No projects tagged “{activeTag}”.{" "}
+            {activeTag && activeStatus
+              ? "No projects match this filter."
+              : activeStatus
+                ? `No ${activeStatus} projects.`
+                : `No projects tagged “${activeTag}”.`}{" "}
             <Link href="/" className="text-neutral-300 underline underline-offset-2">
               Show all apps
             </Link>
@@ -145,6 +174,7 @@ export default async function HomePage({
                       link and the editor's controls never nest. The tags
                       editor stacks below it in the same overlay. */}
                   <div className="mt-1 h-10" aria-hidden />
+                  <div className="h-5" aria-hidden />
                   <div className="h-5" aria-hidden />
                   <div className="mt-2 text-xs text-neutral-600">
                     Updated{" "}
@@ -188,6 +218,7 @@ export default async function HomePage({
                     initialDescription={p.description}
                   />
                   <ProjectCardTags projectId={p.id} initialTags={p.tags ?? ""} />
+                  <ProjectCardStatus projectId={p.id} initialStatus={p.status ?? ""} />
                 </div>
               </li>
             ))}

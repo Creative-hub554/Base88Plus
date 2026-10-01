@@ -132,6 +132,33 @@ describe("project meta — store kernel (setProjectMeta)", () => {
     expect(long.tags!.length).toBe(store.META_TAGS_MAX);
   });
 
+  it("sets a status from the enum; rejects anything else; persists", async () => {
+    const { store } = await fresh();
+    const p = store.createProject("App", "");
+    await new Promise((r) => setTimeout(r, 5)); // ensure the timestamp moves (CI runners are fast)
+    const updated = store.setProjectMeta(p.id, { status: "  shipped  " });
+    expect(updated.status).toBe("shipped");
+    expect(updated.updatedAt).not.toBe(p.updatedAt); // a status edit is a meta edit
+
+    // Persisted: a fresh read sees the status.
+    expect(store.getProject(p.id)?.status).toBe("shipped");
+
+    // Every enum value is accepted.
+    for (const s of store.PROJECT_STATUSES) {
+      expect(store.setProjectMeta(p.id, { status: s }).status).toBe(s);
+    }
+    // Enum-violations throw (case included — the enum is lowercase).
+    // (A padded valid value like " building " does NOT throw: the store
+    // trims first, consistent with every other meta field.)
+    for (const bad of ["Shipped", "SHIPPED", "done", "", "   "]) {
+      expect(() => store.setProjectMeta(p.id, { status: bad })).toThrow(
+        /invalid status/i,
+      );
+    }
+    // Nothing changed by the rejected writes (last accepted = loop's final).
+    expect(store.getProject(p.id)?.status).toBe("shipped");
+  });
+
   it("rejects an empty name and unknown projects; caps overlong values", async () => {
     const { store } = await fresh();
     const p = store.createProject("App", "");
@@ -195,6 +222,8 @@ describe("project meta — PATCH route contract", () => {
     expect((await patch(p.id, { name: 42 })).status).toBe(400);
     expect((await patch(p.id, { description: true })).status).toBe(400);
     expect((await patch(p.id, { tags: ["a", "b"] })).status).toBe(400);
+    expect((await patch(p.id, { status: 7 })).status).toBe(400);
+    expect((await patch(p.id, { status: "done" })).status).toBe(400);
     expect((await patch(p.id, { name: "   " })).status).toBe(400);
     // Nothing was written by any of those.
     expect(store.getProject(p.id)?.name).toBe("App");
@@ -209,6 +238,18 @@ describe("project meta — PATCH route contract", () => {
     expect(data.project.name).toBe("App");
     expect(data.project.tags).toBe("x, y");
     expect(store.getProject(p.id)?.tags).toBe("x, y");
+  });
+
+  it("200: status-only update; unknown projects stay 404", async () => {
+    const { store } = await fresh();
+    const p = store.createProject("App", "");
+    const res = await patch(p.id, { status: "building" });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.project.status).toBe("building");
+    expect(data.project.name).toBe("App");
+    expect(store.getProject(p.id)?.status).toBe("building");
+    expect((await patch("ghost-project", { status: "idea" })).status).toBe(404);
   });
 
   it("404: unknown project — and nothing is created by PATCHing it", async () => {
@@ -246,11 +287,12 @@ describe("project meta — metadata lifecycle round-trip", () => {
     );
     const export1 = Buffer.from(await res1.arrayBuffer());
 
-    // Rename through the REAL route — tags ride the same meta patch.
+    // Rename through the REAL route — tags and status ride the same patch.
     const res2 = await patch(original.id, {
       name: "Renamed App",
       description: "v2 wording",
       tags: "pinned, round-trip",
+      status: "shipped",
     });
     expect(res2.status).toBe(200);
 
@@ -267,9 +309,11 @@ describe("project meta — metadata lifecycle round-trip", () => {
     expect(import1.project.description).toBe("v1 wording");
     expect(import2.project.name).toBe("Renamed App");
     expect(import2.project.description).toBe("v2 wording");
-    // Tags survive the envelope round-trip in the store's normalized shape.
+    // Tags + status survive the envelope round-trip in the store's shape.
     expect(import2.project.tags).toBe("pinned, round-trip");
     expect(store.getProject(import2.project.id)?.tags).toBe("pinned, round-trip");
+    expect(import2.project.status).toBe("shipped");
+    expect(store.getProject(import2.project.id)?.status).toBe("shipped");
     // Fresh ids, original files intact.
     expect(import2.project.id).not.toBe(original.id);
     expect(store.readAppFile(import2.project.id, "index.html")).toContain("hello");

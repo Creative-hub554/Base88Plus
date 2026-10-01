@@ -10,11 +10,12 @@ import { getProject, setProjectMeta } from "@/lib/store";
  * at-least-one-field contract, and shape checks so the store receives
  * only strings.
  *
- * Body: { name?: string, description?: string, tags?: string } — at least
- * one required. Tags are one comma-separated string; the store trims per
- * tag, drops empties, and stores them joined with ", ".
+ * Body: { name?: string, description?: string, tags?: string,
+ * status?: string } — at least one required. Tags are one comma-separated
+ * string (store splits/trims/joins); status must be one of the
+ * `PROJECT_STATUSES` enum values (400 with the value list otherwise).
  * 200 → { project }  full updated record (updatedAt bumped by the store)
- * 400 → { error }    bad JSON / empty patch / wrong types
+ * 400 → { error }    bad JSON / empty patch / wrong types / bad status
  * 404 → { error }    unknown project
  * The store trims and enforces caps; a name that is empty after trim is a
  * 400 from the store (surfaced here as 400 with the store's message).
@@ -37,9 +38,15 @@ export async function PATCH(
     name?: unknown;
     description?: unknown;
     tags?: unknown;
+    status?: unknown;
   };
 
-  const patchShape: { name?: string; description?: string; tags?: string } = {};
+  const patchShape: {
+    name?: string;
+    description?: string;
+    tags?: string;
+    status?: string;
+  } = {};
   if (patch.name !== undefined) {
     if (typeof patch.name !== "string") {
       return Response.json({ error: "name must be a string" }, { status: 400 });
@@ -58,13 +65,20 @@ export async function PATCH(
     }
     patchShape.tags = patch.tags;
   }
+  if (patch.status !== undefined) {
+    if (typeof patch.status !== "string") {
+      return Response.json({ error: "status must be a string" }, { status: 400 });
+    }
+    patchShape.status = patch.status;
+  }
   if (
     patchShape.name === undefined &&
     patchShape.description === undefined &&
-    patchShape.tags === undefined
+    patchShape.tags === undefined &&
+    patchShape.status === undefined
   ) {
     return Response.json(
-      { error: "Provide name, description, and/or tags to update" },
+      { error: "Provide name, description, tags, and/or status to update" },
       { status: 400 },
     );
   }

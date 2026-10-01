@@ -1,3 +1,5 @@
+import type { ProjectStatus } from "./status";
+
 /**
  * One file of a generated app. Text files carry plain UTF-8 in `content`;
  * binary assets (images, fonts, media — detected by extension at every
@@ -22,6 +24,8 @@ export interface Project {
    * merge rules). Optional: older projects and imports predate it.
    */
   tags?: string;
+  /** Lifecycle status; absent until first set (no default is stored). */
+  status?: ProjectStatus;
   createdAt: string;
   updatedAt: string;
   /** Per-project model pin; falls back to the global default when unset. */

@@ -135,6 +135,7 @@ describe("project meta — store kernel (setProjectMeta)", () => {
   it("sets a status from the enum; rejects anything else; persists", async () => {
     const { store } = await fresh();
     const p = store.createProject("App", "");
+    await new Promise((r) => setTimeout(r, 5)); // ensure the timestamp moves (CI runners are fast)
     const updated = store.setProjectMeta(p.id, { status: "  shipped  " });
     expect(updated.status).toBe("shipped");
     expect(updated.updatedAt).not.toBe(p.updatedAt); // a status edit is a meta edit

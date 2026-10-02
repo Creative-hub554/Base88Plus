@@ -44,12 +44,15 @@ process. Download zips: the
   of six demos rendered as raw browser-default HTML. The rule now governs
   pages only, and a real stylesheet plus `app.js` are required on every
   demo, linked from every page.
+- The blog template generates again. Its brief asked for four pages plus a
+  shared data file in one generation, which does not fit — every attempt
+  overflowed before closing the code fence and the demo was rejected as
+  incomplete. The newsletter page is gone; the tagline follows.
 - A truncated generation can no longer be cached as a ready demo. Output
   that ends before `<body>` (the model emitted a 5 KB inline base64
   `og:image` and stopped) was served as a working template whose preview
   rendered blank. Generation is retried unless the html has a body and a
   styling source, and base64 raster blobs are called out as forbidden.
-
 - Clearing a project status actually works: the card select's "No
   status" option used to save the empty string to the meta route, which
   the store rejected as an enum violation — a status could be set but

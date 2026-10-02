@@ -15,7 +15,10 @@
  * the ordinary contracts.
  */
 import { describe, expect, it } from "vitest";
-import { sanitizeDemoFiles } from "@/lib/template-generation";
+import {
+  demoLooksComplete,
+  sanitizeDemoFiles,
+} from "@/lib/template-generation";
 import type { ProjectFile } from "@/lib/types";
 
 const pf = (path: string, content: string): ProjectFile => ({ path, content });
@@ -129,5 +132,56 @@ describe("sanitizeDemoFiles", () => {
     const html = "<p>nothing to do</p>";
     const out = sanitizeDemoFiles([pf("index.html", html)]);
     expect(out[0].content).toBe(html);
+  });
+});
+
+describe("demoLooksComplete", () => {
+  it("accepts a styled page with a body", () => {
+    expect(
+      demoLooksComplete([
+        pf("index.html", "<html><body><h1>hi</h1></body></html>"),
+        pf("styles.css", "body{margin:0}"),
+      ]),
+    ).toBe(true);
+  });
+
+  it("accepts an inline <style> block with no separate stylesheet", () => {
+    expect(
+      demoLooksComplete([
+        pf("index.html", "<html><body><style>body{margin:0}</style></body></html>"),
+      ]),
+    ).toBe(true);
+  });
+
+  // The real incident: generation returned a 5 KB inline base64 og:image and
+  // stopped before <body>. It was cached and served as a ready demo whose
+  // preview rendered blank.
+  it("rejects output truncated before <body>", () => {
+    const truncated = [
+      "<!doctype html><html><head>",
+      '<meta property="og:image" content="data:image/png;base64,iVBORw0KGgo',
+    ].join("");
+    expect(demoLooksComplete([pf("index.html", truncated)])).toBe(false);
+  });
+
+  it("rejects unstyled markup even when the body is intact", () => {
+    expect(
+      demoLooksComplete([
+        pf("index.html", "<html><body><h1>Title</h1><p>text</p></body></html>"),
+      ]),
+    ).toBe(false);
+  });
+
+  it("rejects a file set with no html at all", () => {
+    expect(demoLooksComplete([pf("styles.css", "body{}")])).toBe(false);
+  });
+
+  it("rejects an empty stylesheet as a styling source", () => {
+    expect(
+      demoLooksComplete([
+        pf("index.html", "<html><body>x</body></html>"),
+        pf("styles.css", "   "),
+      ]),
+    ).toBe(false);
   });
 });

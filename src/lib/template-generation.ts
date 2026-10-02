@@ -29,24 +29,55 @@ import type { ProjectFile } from "@/lib/types";
 
 /**
  * Extra instruction for template generation. The brief is the file plan:
- * a demo must emit exactly the files its brief describes — a multi-page
- * brief (SaaS site, blog) gets every page as a real .html file, never a
+ * a demo must emit every file its brief describes — a multi-page brief
+ * (SaaS site, blog) gets every page as a real .html file, never a
  * single-page stub whose nav links 404. Size guidance is per-file so a
  * five-file demo isn't squeezed into one 300-line page.
+ *
+ * The "emit exactly the files" rule governs PAGES, never styling. Reading
+ * it literally once made four of six demos ship bare unstyled markup:
+ * no brief names a stylesheet, so "no more, no fewer" talked the model out
+ * of the one file that carries the entire visual design. The suffix
+ * therefore mandates the design system explicitly.
  */
 const TEMPLATE_SUFFIX = `
 
-This is a TEMPLATE DEMO: emit EXACTLY the files the brief describes — no more,
-no fewer. When the brief names multiple pages (index.html, pricing.html,
-about.html, …), every page is its own file linked with plain relative paths,
-and the shared navbar/footer are duplicated per page (no build step). When it
-describes a shared data file (e.g. posts.js), emit it and have the pages read
-it. NEVER link to a file you did not emit. Keep each file focused and polished
-(roughly 100–200 lines per page): a striking above-the-fold visual and a clean
-section flow beat raw length.
+This is a TEMPLATE DEMO. Emit every page the brief describes — when it names
+index.html, pricing.html, about.html, …, each is its own file linked with
+plain relative paths, and the shared navbar/footer are duplicated per page
+(no build step). When it describes a shared data file (e.g. posts.js), emit
+it and have the pages read it. NEVER link to a file you did not emit.
+
+Ship a real stylesheet with every demo: one styles.css holding the design
+system (custom properties in :root, a deliberate palette, a type scale with
+clamp(), grid/flex layout), linked from EVERY page. Unstyled markup is a
+failed demo — a page that renders as browser-default HTML does not show off
+anything. Interactive behavior belongs in one app.js, also linked from every
+page. Keep each file focused and polished (roughly 100–200 lines per page):
+a striking above-the-fold visual and a clean section flow beat raw length.
+
 IMPORTANT: never reference image files (img src, background url) — no local
 assets and no external URLs. Draw all visuals with inline SVG or CSS shapes
-and gradients only; the demo must look complete with just its own files.`;
+and gradients only; the demo must look complete with just its own files.
+Never inline a base64-encoded raster image (a data:image/png;base64 blob) —
+it bloats the file past every useful limit; use inline SVG or CSS gradients.`;
+
+/**
+ * Reject a demo whose html is truncated or unstyled: no <body>, or no
+ * stylesheet/inline <style> anywhere. Without this, a generation that gets
+ * cut off mid-output (the model emitted a 5 KB base64 og:image and the
+ * response ended before <body>) is cached and served as a "ready" demo that
+ * renders as a blank page. Retrying beats shipping it.
+ */
+export function demoLooksComplete(files: ProjectFile[]): boolean {
+  const html = files.filter((f) => f.path.endsWith(".html"));
+  if (html.length === 0) return false;
+  if (!html.some((f) => /<body[\s>]/i.test(f.content))) return false;
+  const styled =
+    files.some((f) => f.path.endsWith(".css") && f.content.trim().length > 0) ||
+    html.some((f) => /<style[\s>]/i.test(f.content));
+  return styled;
+}
 
 /**
  * Cache key component: hash of everything the demo generation depends on
@@ -331,7 +362,9 @@ async function generateTemplateFiles(
         text += delta;
       }
       const files = extractFiles(text);
-      if (files && files.length > 0) return sanitizeDemoFiles(files);
+      if (files && files.length > 0 && demoLooksComplete(files)) {
+        return sanitizeDemoFiles(files);
+      }
       console.log(
         `[templates] ${template.id}: degenerate attempt ${attempt + 1}`,
       );

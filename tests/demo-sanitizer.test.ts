@@ -59,6 +59,49 @@ describe("sanitizeDemoFiles", () => {
     expect(out[0].content).toBe(html);
   });
 
+  it("neutralizes anchors to emitted-nowhere pages instead of deleting them", () => {
+    const html = [
+      '<nav><a href="index.html">Home</a><a href="missing.html">Docs</a></nav>',
+      '<a href="post.html#intro">Intro</a>',
+      "<p>kept</p>",
+    ].join("\n");
+    const out = sanitizeDemoFiles([
+      pf("index.html", html),
+      pf("post.html", "<p>post</p>"),
+    ]);
+    const cleaned = out[0].content;
+    // Emitted pages keep their hrefs (fragment rides along).
+    expect(cleaned).toContain('href="index.html"');
+    expect(cleaned).toContain('href="post.html#intro"');
+    // Dead page: rewritten in place, link text survives.
+    expect(cleaned).toContain('href="#"');
+    expect(cleaned).toContain(">Docs</a>");
+    expect(cleaned).not.toContain("missing.html");
+  });
+
+  it("anchors: root-relative links do NOT count as keepable (a static demo cannot leave itself)", () => {
+    // The live saas failure: /pricing, /about, /contact look like routes
+    // but 404 in a static multi-page demo.
+    const html = '<nav><a href="/">Home</a><a href="/pricing">Pricing</a></nav>';
+    const out = sanitizeDemoFiles([pf("index.html", html)]);
+    const cleaned = out[0].content;
+    expect(cleaned).toContain('>Pricing</a>');
+    expect(cleaned).not.toContain('href="/pricing"');
+    expect(cleaned).toContain('href="#"');
+  });
+
+  it("anchors: external, mailto, tel, data, and hash links are kept", () => {
+    const html = [
+      '<a href="https://example.com">ext</a>',
+      '<a href="mailto:hi@example.com">mail</a>',
+      '<a href="tel:+123">tel</a>',
+      '<a href="#top">hash</a>',
+      '<a href="data:text/html,hi">data</a>',
+    ].join("\n");
+    const out = sanitizeDemoFiles([pf("index.html", html)]);
+    expect(out[0].content).toBe(html);
+  });
+
   it("does not touch non-html files", () => {
     const files = [pf("styles.css", 'a { content: "<img src=missing.png>"; }')];
     const out = sanitizeDemoFiles(files);

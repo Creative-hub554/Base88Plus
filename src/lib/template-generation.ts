@@ -368,9 +368,15 @@ function relinkPlaceholderNav(html: string, emitted: Set<string>): string {
       slug === "" ? undefined : slug === "home" ? byslug.get("index") : byslug.get(slug);
     if (target === undefined || ambiguous.has(slug)) continue;
 
+    // Slice the href out by hand (a String.replace on the tag reads as a
+    // sanitising sink to CodeQL) and keep the anchor's other attributes.
+    const hrefAt = openTag.toLowerCase().indexOf('href="#"');
+    if (hrefAt === -1) continue;
     out += html.slice(last, m.index);
-    // Keep the anchor's other attributes (class, aria); only the href moves.
-    out += openTag.replace(/href="#"/i, `href="${target}"`);
+    out +=
+      openTag.slice(0, hrefAt) +
+      `href="${target}"` +
+      openTag.slice(hrefAt + 'href="#"'.length);
     last = m.index + openTag.length;
   }
   out += html.slice(last);

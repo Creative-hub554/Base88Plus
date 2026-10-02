@@ -2,7 +2,12 @@
 
 import { useRouter } from "next/navigation";
 import { useInlineMetaEdit, MetaEditButtons } from "./inline-meta-edit";
-import { PROJECT_STATUSES, STATUS_DOT, type ProjectStatus } from "@/lib/status";
+import {
+  NO_STATUS_LABEL,
+  PROJECT_STATUSES,
+  STATUS_DOT,
+  type ProjectStatus,
+} from "@/lib/status";
 
 /**
  * Inline project-status editor on dashboard cards — the FOURTH metadata
@@ -32,7 +37,7 @@ import { PROJECT_STATUSES, STATUS_DOT, type ProjectStatus } from "@/lib/status";
 export function ProjectCardStatus({
   projectId,
   initialStatus,
-  fallback = "No status",
+  fallback = NO_STATUS_LABEL,
   refreshAfterSave = false,
 }: {
   projectId: string;

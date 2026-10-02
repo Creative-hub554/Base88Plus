@@ -12,9 +12,9 @@ import { ProjectCardStatus } from "./project-card-status";
  *   in the reserved-slot overlay beside the link, plus the updated /
  *   generation-health meta lines. Markup identical to the pre-extraction
  *   inline card (per-surface suites + dashboard suite pin this);
- * - `board`: the compact card — no description slot (the board groups by
- *   status; description text fights the column width) and no meta lines,
- *   tags + status editors only.
+ * - `board`: the compact card — no description surface (the board groups
+ *   by status; description text fights the column width) and no meta
+ *   lines, tags + status editors only.
  *
  * Both layouts keep the recipe 7 sibling-overlay contract: the client
  * editors render as a SIBLING of the card <Link>, never inside it, so
@@ -35,7 +35,6 @@ export function ProjectCard({
   /** Effective model id — feeds the grid's generation-health line. */
   modelId?: string;
 }) {
-  const p = project;
   const board = layout === "board";
 
   // Reserved slots: the overlay editors position over these. Board keeps
@@ -57,36 +56,35 @@ export function ProjectCard({
     </>
   );
 
-  const overlay = board ? (
-    <div className="absolute inset-x-3 top-10">
-      <ProjectCardTags projectId={p.id} initialTags={p.tags ?? ""} />
+  const overlay = (
+    <div
+      className={`absolute ${board ? "inset-x-3" : "inset-x-4"} top-10`}
+    >
+      {!board && (
+        <ProjectCardDescription
+          projectId={project.id}
+          initialDescription={project.description}
+        />
+      )}
+      <ProjectCardTags projectId={project.id} initialTags={project.tags ?? ""} />
       <ProjectCardStatus
-        projectId={p.id}
-        initialStatus={p.status ?? ""}
-        refreshAfterSave
+        projectId={project.id}
+        initialStatus={project.status ?? ""}
+        refreshAfterSave={board}
       />
-    </div>
-  ) : (
-    <div className="absolute inset-x-4 top-10">
-      <ProjectCardDescription
-        projectId={p.id}
-        initialDescription={p.description}
-      />
-      <ProjectCardTags projectId={p.id} initialTags={p.tags ?? ""} />
-      <ProjectCardStatus projectId={p.id} initialStatus={p.status ?? ""} />
     </div>
   );
 
   return (
     <li className="relative">
       <Link
-        href={`/app/${p.id}`}
+        href={`/app/${project.id}`}
         className={`block rounded-xl border border-neutral-800 transition hover:border-neutral-600 hover:bg-neutral-900 ${
           board ? "p-3 pb-8" : "p-4 pb-10"
         }`}
       >
         <div className="flex items-center justify-between">
-          <div className="font-medium text-white">{p.name}</div>
+          <div className="font-medium text-white">{project.name}</div>
           {published && (
             <span className="flex items-center gap-1 rounded-md bg-emerald-950 px-1.5 py-0.5 text-[10px] text-emerald-400">
               <span className="h-1 w-1 rounded-full bg-emerald-400" />
@@ -99,13 +97,13 @@ export function ProjectCard({
           <>
             <div className="mt-2 text-xs text-neutral-600">
               Updated{" "}
-              {new Date(p.updatedAt).toLocaleString(undefined, {
+              {new Date(project.updatedAt).toLocaleString(undefined, {
                 dateStyle: "medium",
                 timeStyle: "short",
               })}
             </div>
             {(() => {
-              const health = getGenerationHealth(p.id);
+              const health = getGenerationHealth(project.id);
               if (!modelId || !health) return null;
               const pct = Math.round(health.successRate * 100);
               return (

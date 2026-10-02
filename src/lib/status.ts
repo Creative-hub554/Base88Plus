@@ -43,3 +43,10 @@ export const STATUS_DOT: Record<ProjectStatus, string> = {
   building: "bg-amber-400",
   shipped: "bg-emerald-400",
 };
+
+/**
+ * The label for projects with no status — shared by the card select's
+ * empty option, the card's empty affordance, and the board's trailing
+ * column so all three read identically.
+ */
+export const NO_STATUS_LABEL = "No status";

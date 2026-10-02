@@ -99,6 +99,27 @@ process. Download zips: the
   from the cache — kept showing the broken original long after the promote
   path had been fixed. The warm pass now re-runs the sanitiser over the
   cache and writes back only what changed.
+- Template demos are checked for whether they contain anything. Every guard
+  so far was satisfiable by a page that was technically present and
+  completely empty, and all six shipped demos were exactly that while
+  passing every check — a walk of all nine demo pages found a SaaS pricing
+  page rendering a heading and a blank void (its own table hidden at load
+  with no toggle on the page), a contact form that never attached a handler
+  so "Send" put the message in the URL, a blog that shipped one of the three
+  pages its brief named, and body copy reading "Feature 1", "Project 3",
+  "Sponsor 1". Three structural gates now reject that: every file the brief
+  names must be emitted; every id a linked script selects must exist on the
+  page linking it (or be guarded); and numbered placeholder copy is refused.
+  Deliberately no character-count floor — a demo that cannot reach a quota
+  is lost from the gallery rather than shown as thin.
+- Template generation asks for substance, because it was asking for
+  brevity. "100–200 lines per page … a clean section flow beat raw length"
+  read as an instruction to be short, and five of six demos came back as
+  145–380 characters of visible text inside a competent header and footer.
+  The brief now requires real content per section and names the filler it
+  has to reject; because one `app.js` is shared by every page, it also has
+  to say that shared scripts must be null-safe, must not hide a shared
+  element on load, and must use future dates.
 
 ## [0.10.0] — 2026-10-01
 

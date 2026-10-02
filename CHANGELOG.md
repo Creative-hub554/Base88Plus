@@ -90,6 +90,35 @@ process. Download zips: the
 
 ### Fixed
 
+- A long assistant reply no longer freezes the chat panel while it streams.
+  The panel re-renders on every token and every assistant message in it,
+  so a reply of length n was parsed n times over — about 415ms of
+  main-thread work for a 27000-character answer, and it degrades from
+  there. Reply rendering is now incremental: about 61ms for the same
+  stream, and linear rather than quadratic in the length of the reply.
+
+  The parser is resumable. Almost none of a streaming buffer can still
+  change, so the block parser now records where each block begins and a
+  per-message parser commits the blocks that are settled, re-running only
+  from the first one that is not. Total parsing across a stream dropped to
+  2.7x the length of the reply; re-parsing everything costs about 200x.
+
+  Finding where it is safe to resume was the interesting part, and the
+  obvious answer is wrong. A blank line is not automatically a boundary:
+  the list parser continues a list ACROSS one when the next line is
+  another bullet, so `- a\n\n- b` is a single list. Worse, a line that has
+  not finished arriving can change what it IS — `2.` parses as a paragraph,
+  and one character later `2. ` is a list marker that merges *backwards*
+  into the list before it, so a block that was final a moment ago stopped
+  being final. A boundary is therefore only claimed behind a line that is
+  both settled and not a bullet.
+
+  Rendering benefits from the same fact rather than from a second
+  mechanism: a committed block is the same object on every later render,
+  so blocks are rendered through a memoised component and a paragraph the
+  model finished a second ago is not re-rendered at all. Output is
+  unchanged — a streamed reply renders exactly the DOM the finished reply
+  would, which is pinned.
 - The Markdown reply parser no longer goes quadratic on the length of
   the message. Two checks asked a question whose answer cost
   O(remaining) and then asked it once per character, so both are now

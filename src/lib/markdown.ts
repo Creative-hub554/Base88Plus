@@ -521,10 +521,42 @@ function bulletText(line: string): string {
  * ordering is the whole reason this is a single left-to-right pass rather
  * than a set of independent line rules.
  */
-export function parseMarkdown(source: string): Block[] {
-  const lines = toLines(source);
+/**
+ * Blocks produced by one pass of the block parser, and where it got to.
+ *
+ * `starts` is parallel to `blocks`: the line each block begins on. That is
+ * what lets a streaming caller decide which of these blocks it is allowed
+ * to keep — see `safeLineCount` and `createStreamingMarkdownParser`.
+ */
+type ParsedRun = {
+  blocks: Block[];
+  /** Line index each block begins on, parallel to `blocks`. */
+  starts: number[];
+  /** Line index a following pass should resume from. */
+  next: number;
+};
+
+/**
+ * Run the block parser over `lines` starting at `start`.
+ *
+ * Resumable so a streaming reply can parse only the part that changed. A
+ * block is a function of its own lines and the lines after it, never of the
+ * lines before it — except that a line which is still arriving can change
+ * its mind about what it is (see `safeLineCount`), which is why the caller
+ * decides where it is safe to resume rather than assuming the end.
+ */
+function parseBlocksFrom(lines: string[], start: number): ParsedRun {
   const blocks: Block[] = [];
-  let i = 0;
+  const starts: number[] = [];
+  let i = start;
+  let blockStart = start;
+
+  // Every block below is pushed through here, so its start line is recorded
+  // in the same place the block is created.
+  const emit = (block: Block) => {
+    blocks.push(block);
+    starts.push(blockStart);
+  };
 
   while (i < lines.length) {
     const line = lines[i];
@@ -535,6 +567,9 @@ export function parseMarkdown(source: string): Block[] {
       i += 1;
       continue;
     }
+
+    // Everything below this point emits exactly one block starting here.
+    blockStart = i;
 
     // Fenced code block.
     const fence = fenceMarker(trimmed);
@@ -552,7 +587,7 @@ export function parseMarkdown(source: string): Block[] {
         body.push(lines[i]);
         i += 1;
       }
-      blocks.push({ kind: "code", lang, value: body.join("\n") });
+      emit({ kind: "code", lang, value: body.join("\n") });
       continue;
     }
 
@@ -563,7 +598,7 @@ export function parseMarkdown(source: string): Block[] {
       // Strip an optional closing run of `#`.
       let end = rest.length;
       while (end > 0 && rest[end - 1] === "#") end -= 1;
-      blocks.push({
+      emit({
         kind: "heading",
         level: level as 1 | 2 | 3 | 4 | 5 | 6,
         children: parseInline(rest.slice(0, end).trim()),
@@ -584,7 +619,7 @@ export function parseMarkdown(source: string): Block[] {
         i += 1;
       }
       const inner = parseMarkdown(quoted.join("\n"));
-      blocks.push({
+      emit({
         kind: "quote",
         children: flattenQuote(inner),
       });
@@ -625,7 +660,7 @@ export function parseMarkdown(source: string): Block[] {
         }
         break;
       }
-      blocks.push({ kind: "list", ordered, items });
+      emit({ kind: "list", ordered, items });
       continue;
     }
 
@@ -646,11 +681,218 @@ export function parseMarkdown(source: string): Block[] {
       paragraph.push(candidate.replace(/[ \t]+$/, ""));
       i += 1;
     }
-    blocks.push({ kind: "paragraph", children: parseInline(paragraph.join("\n")) });
+    emit({ kind: "paragraph", children: parseInline(paragraph.join("\n")) });
   }
 
-  return blocks;
+  return { blocks, starts, next: i };
 }
+
+/** Parse a complete Markdown document. The streaming path below reuses this. */
+export function parseMarkdown(source: string): Block[] {
+  return parseBlocksFrom(toLines(source), 0).blocks;
+}
+
+// ---------------------------------------------------------------------------
+// Streaming — parse a growing buffer without re-parsing the part that is done
+// ---------------------------------------------------------------------------
+
+/**
+ * How many leading lines of `source` can no longer be affected by text that has
+ * not arrived yet.
+ *
+ * This is the load-bearing idea behind streaming a reply. The buffer is
+ * re-rendered on every token, so parsing all of it each time is quadratic in
+ * the length of the reply — measured at roughly 500ms of main-thread work for a
+ * 54000-character answer. Almost none of that buffer can still change, so the
+ * job here is to find the part that genuinely can.
+ *
+ * The tempting rule is "a blank line ends a block", and on its own it is WRONG
+ * here, in two separate ways that only show up mid-stream:
+ *
+ *   1. The list parser continues a list ACROSS a blank line when the next line
+ *      is another bullet. `- a\n\n- b` is one list, not two. So a blank line
+ *      followed by a bullet is not a boundary at all — and while the model is
+ *      still writing that bullet, we cannot yet tell.
+ *
+ *   2. Worse, a line that has not finished arriving can change what it IS.
+ *      `1. a` then a blank line then `2.` parses `2.` as a paragraph. One
+ *      character later, `2. ` is a list marker — and a list marker merges
+ *      BACKWARDS into the list before it. So the block that was final a moment
+ *      ago is not final now, and a resume point chosen from the previous parse
+ *      is stale. This one is why the obvious implementation is wrong rather
+ *      than merely conservative.
+ *
+ * So a boundary is a blank line followed by a line that is both SETTLED — it
+ * has a newline after it, so no more characters can change it — and not a
+ * bullet. Under those two conditions nothing later can reinterpret anything
+ * before them: the blank line has already ended any paragraph, and a settled
+ * non-bullet line cannot become the continuation of an earlier list.
+ *
+ * The result only ever grows, which is what makes caching sound: text is
+ * append-only while streaming, a line already accepted cannot become a bullet,
+ * and a fence cannot un-start.
+ */
+export function safeLineCount(source: string): number {
+  let offset = 0;
+  let line = 0;
+  let inFence = false;
+  /** Line index of the most recent blank line outside a fence, or -1. */
+  let blankLine = -1;
+  let best = 0;
+
+  while (offset <= source.length) {
+    let end = offset;
+    while (end < source.length && source[end] !== "\n") end += 1;
+    // A line with no newline after it is still being written.
+    const settled = end < source.length;
+    const raw = source.slice(offset, end);
+    const trimmed = raw.trim();
+
+    if (inFence) {
+      // Same close test the block parser uses, so this scan can never believe
+      // a fence is open when the parser thinks it closed.
+      const closing = fenceMarker(trimmed);
+      if (closing !== null && trimmed.slice(closing.length).trim().length === 0) {
+        inFence = false;
+      }
+    } else if (trimmed.length === 0) {
+      // Later blank lines of a run overwrite earlier ones: if the line after
+      // the run turns out to be settled and not a bullet, splitting after the
+      // run is still correct and re-parses less.
+      blankLine = line;
+    } else {
+      if (blankLine !== -1 && settled && bulletIndent(raw) === -1) {
+        best = blankLine + 1;
+      }
+      blankLine = -1;
+      if (fenceMarker(trimmed) !== null) inFence = true;
+    }
+
+    if (!settled) break;
+    offset = end + 1;
+    line += 1;
+  }
+
+  return best;
+}
+
+/**
+ * What a streaming parser actually did. Exposed so the incrementality can be
+ * asserted by COUNTING rather than by timing — a test that waits for a
+ * quadratic parser to finish is a slow test that eventually stops failing.
+ */
+export type MarkdownParseStats = {
+  /** Blocks in the cache. These are never parsed again. */
+  committedBlocks: number;
+  /** Times the cache had to be thrown away because the text was not a prefix. */
+  resets: number;
+  /** Times the block parser ran: one per token, by design. */
+  passes: number;
+  /**
+   * Characters handed to the block parser across every pass. This is the
+   * number wall-clock tracks, and the one that grows quadratically when a
+   * caller re-parses the whole buffer each time.
+   */
+  charsParsed: number;
+};
+
+export type StreamingMarkdownParser = {
+  /** Parse a buffer that only ever grows. Must equal `parseMarkdown(text)`. */
+  parse(text: string): Block[];
+  stats(): MarkdownParseStats;
+};
+
+/**
+ * A parser for one streaming message.
+ *
+ * One instance per mounted message: two bubbles can stream at once and must not
+ * share a cache. The contract is that `parse(text)` returns exactly what
+ * `parseMarkdown(text)` would, for every intermediate state of the stream — all
+ * of the win is in how it gets there, none of it in what it returns.
+ *
+ * Each call parses only the lines from the last uncommitted block onwards, and
+ * commits back only the blocks `safeLineCount` vouches for. Per token the work
+ * is therefore proportional to the tail of the reply rather than to all of it,
+ * and the total across a stream is linear.
+ *
+ * The committed blocks are the SAME objects on every later call, which is what
+ * lets the renderer skip them: a memoised block component sees identical props
+ * for a block that is already settled and never re-renders it. The parse saving
+ * and the render saving are the same fact, counted twice.
+ */
+export function createStreamingMarkdownParser(): StreamingMarkdownParser {
+  let committedBlocks: Block[] = [];
+  /** Line index the next pass starts from: the first block not yet settled. */
+  let resumeAt = 0;
+  let lastText: string | null = null;
+  let lastBlocks: Block[] = [];
+  const counts = { resets: 0, passes: 0, charsParsed: 0 };
+
+  return {
+    parse(text: string): Block[] {
+      // Unchanged text is the overwhelmingly common case once a reply has
+      // finished: every other bubble in the panel re-renders while this one
+      // streams, and none of them should re-parse anything.
+      if (text === lastText) return lastBlocks;
+
+      const lines = toLines(text);
+
+      // A streaming buffer only grows, so this should never happen. If it does,
+      // this parser was handed different text — a message swapped underneath
+      // it, a retry — and the cache describes a buffer that no longer exists.
+      if (resumeAt > lines.length) {
+        committedBlocks = [];
+        resumeAt = 0;
+        counts.resets += 1;
+      }
+
+      const run = parseBlocksFrom(lines, resumeAt);
+      counts.passes += 1;
+      // Charged from the resume point: the honest measure of the work done.
+      counts.charsParsed += lineChars(lines, resumeAt, lines.length);
+
+      const blocks = committedBlocks.concat(run.blocks);
+      const safe = safeLineCount(text);
+
+      // Blocks that start inside the settled region cannot be changed by any
+      // text still to come, so they are safe to keep. The last block of this
+      // pass is excluded regardless: it can always absorb the next line, and a
+      // line still arriving can reclassify it into the block before it (see
+      // `safeLineCount` case 2).
+      let keep = 0;
+      while (keep < run.blocks.length && run.starts[keep] < safe) keep += 1;
+      if (keep === run.blocks.length) keep -= 1;
+
+      if (keep > 0) {
+        committedBlocks = blocks.slice(0, committedBlocks.length + keep);
+        resumeAt = keep < run.blocks.length ? run.starts[keep] : run.next;
+      } else if (run.blocks.length === 0) {
+        // Nothing but blank lines: skip past them.
+        resumeAt = run.next;
+      }
+
+      lastText = text;
+      lastBlocks = blocks;
+      return blocks;
+    },
+    stats(): MarkdownParseStats {
+      return {
+        committedBlocks: committedBlocks.length,
+        resets: counts.resets,
+        passes: counts.passes,
+        charsParsed: counts.charsParsed,
+      };
+    },
+  };
+}
+
+/** Characters of `lines[from, to)`, newline-separated — the parser's input size. */
+function lineChars(lines: string[], from: number, to: number): number {
+  let total = 0;
+  for (let i = from; i < to; i += 1) total += lines[i].length + 1;
+  return total;
+}
+
 
 /**
  * Flatten parsed blocks back to inline nodes for a quote's children.

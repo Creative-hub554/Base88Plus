@@ -13,8 +13,12 @@
  * not emitting a link node at all — so there is no href check to forget
  * here. `rel="noopener noreferrer"` is defence in depth for the target.
  */
-import type { ReactNode } from "react";
-import { parseMarkdown, type Block, type Inline } from "../lib/markdown";
+import { memo, useState, type ReactNode } from "react";
+import {
+  createStreamingMarkdownParser,
+  type Block,
+  type Inline,
+} from "../lib/markdown";
 
 /** Tailwind classes per heading level, sized for the chat panel. */
 const HEADING_CLASSES: Record<number, string> = {
@@ -139,18 +143,47 @@ function renderBlock(block: Block, index: number): ReactNode {
 }
 
 /**
+ * One block, memoised on the block object itself.
+ *
+ * This is the second half of not re-rendering the whole reply per token. The
+ * streaming parser hands back the SAME block objects for every part of the
+ * buffer that is already final, so `React.memo` sees identical props and skips
+ * those subtrees entirely — a paragraph the model finished a second ago costs
+ * nothing to keep on screen, and only the paragraph still being written
+ * re-renders. Keys are unchanged from the plain `renderBlock` map, so the
+ * rendered DOM is identical to what it was before.
+ */
+const MarkdownBlock = memo(function MarkdownBlock({
+  block,
+  index,
+}: {
+  block: Block;
+  index: number;
+}) {
+  return renderBlock(block, index);
+});
+
+/**
  * Render an assistant reply as Markdown.
  *
  * Returns a fragment of blocks with normal vertical rhythm. An empty string
  * yields an empty fragment rather than an empty paragraph, so a streaming
  * message that has produced no text yet does not leave a gap in the panel.
+ *
+ * The parser is created once per mounted message, not once per render: one
+ * instance per bubble, because two replies can be streaming at once and must
+ * not share a cache. Its output is by construction identical to
+ * `parseMarkdown(text)` — see `createStreamingMarkdownParser`.
  */
 export function MarkdownMessage({ text }: { text: string }) {
-  const blocks = parseMarkdown(text);
+  const [parser] = useState(createStreamingMarkdownParser);
+  const blocks = parser.parse(text);
   if (blocks.length === 0) return null;
   return (
     <div className="space-y-2" data-testid="markdown-message">
-      {blocks.map((block, index) => renderBlock(block, index))}
+      {blocks.map((block, index) => (
+        <MarkdownBlock key={index} block={block} index={index} />
+      ))}
     </div>
   );
 }

@@ -247,8 +247,23 @@ function stripBrokenPass(html: string, emitted: Set<string>): string {
         // along on an emitted page (post.html#intro, post.html?id=2).
         const filePath = anchorHref.split("#")[0].split("?")[0].trim();
         if (filePath && emitted.has(filePath)) return tag;
-        // Dead anchor: neutralize instead of delete.
-        return tag.replace(/(\bhref=)["'][^"']*["']/i, '$1"#"');
+        // Dead anchor: neutralize by REBUILDING the tag around the href
+        // value with slice/concat — never a chained .replace(), which is
+        // the incomplete-sanitization pattern (CodeQL
+        // js/incomplete-multi-character-sanitization): a one-shot value
+        // swap could leave a second href-shaped construct inside another
+        // attribute's value untouched. Slicing replaces exactly one
+        // occurrence by construction.
+        const hrefAttr = /\bhref=/i.exec(tag);
+        if (!hrefAttr) return "";
+        const open = tag.indexOf('"', hrefAttr.index);
+        const openSingle = tag.indexOf("'", hrefAttr.index);
+        const quote =
+          open === -1 ? "'" : openSingle === -1 ? '"' : open < openSingle ? '"' : "'";
+        const valueStart = tag.indexOf(quote, hrefAttr.index);
+        const valueEnd = tag.indexOf(quote, valueStart + 1);
+        if (valueStart === -1 || valueEnd === -1) return "";
+        return tag.slice(0, valueStart) + '"#"' + tag.slice(valueEnd + 1);
       }
       const target = imgSrc ?? scriptSrc ?? linkHref;
       return keepAsset(target) ? tag : "";

@@ -9,7 +9,10 @@ import {
   setProjectFromTemplate,
 } from "@/lib/store";
 import { TEMPLATES, templateProjectId } from "@/lib/templates";
-import { getTemplateCacheStatus } from "@/lib/template-generation";
+import {
+  getTemplateCacheStatus,
+  sanitizeDemoFiles,
+} from "@/lib/template-generation";
 import type { BuilderUIMessage } from "@/lib/types";
 
 /**
@@ -57,11 +60,22 @@ export async function POST(
   const name = template.appName;
   const project = createProject(name, template.brief);
 
-  // Copy every demo file verbatim into the new project's workspace.
-  for (const f of source) {
-    const content = readAppFile(libraryId, f.path);
-    if (content === null) continue;
-    saveAppFile(project.id, f.path, content);
+  // Copy every demo file into the new project's workspace, running the
+  // deterministic repairs on the way through rather than trusting whatever
+  // is sitting in the cache. Cached demos predate the current sanitizer —
+  // they still carry placeholder navbars and JSON-escaped data URIs — and
+  // the repairs are idempotent, so this is a no-op on an already-clean demo
+  // while every historical demo is repaired at the moment it is used.
+  const repaired = sanitizeDemoFiles(
+    source
+      .map((f) => {
+        const content = readAppFile(libraryId, f.path);
+        return content === null ? null : { path: f.path, content };
+      })
+      .filter((f): f is NonNullable<typeof f> => f !== null),
+  );
+  for (const f of repaired) {
+    saveAppFile(project.id, f.path, f.content);
   }
 
   setProjectFromTemplate(project.id, {

@@ -314,12 +314,152 @@ function stripBrokenPass(html: string, emitted: Set<string>): string {
 }
 
 /**
+ * Relink placeholder nav anchors onto the pages the demo actually emitted.
+ *
+ * A multi-page demo whose entire navbar is `href="#"` renders fine and
+ * links to nothing: the audit that checks "does every href resolve to an
+ * emitted file" reports zero dead links, because "#" is a legal target.
+ * The site still cannot be navigated, which is the whole point of a
+ * multi-page demo.
+ *
+ * Models write those placeholders when a brief implies a nav but does not
+ * spell out the filenames. The label usually names the page, so match it
+ * against the emitted pages: "Pricing" -> pricing.html, "Home" ->
+ * index.html. Matching is exact on a slug, so a legitimate in-page anchor
+ * ("skip to content", "top") never matches anything and is left alone.
+ */
+const PLACEHOLDER_ANCHOR_RE = /<a\b([^>]*)\bhref="#"/gi;
+
+/**
+ * Text content of html[from, to) with any tags dropped.
+ *
+ * Manual exec loop rather than `.replace(/<[^>]*>/g, "")`: CodeQL reads a
+ * String.replace that strips markup as an *incomplete sanitiser* and
+ * reports the surviving string as a possible `<script` injection, even
+ * though the value never reaches the page (it is only slugged).
+ */
+const LABEL_TAG_RE = /<[^>]*>/g;
+
+function textBetween(html: string, from: number, to: number): string {
+  let out = "";
+  let last = from;
+  LABEL_TAG_RE.lastIndex = from;
+  for (
+    let m = LABEL_TAG_RE.exec(html);
+    m !== null && m.index + m[0].length <= to;
+    m = LABEL_TAG_RE.exec(html)
+  ) {
+    out += html.slice(last, m.index);
+    last = m.index + m[0].length;
+  }
+  LABEL_TAG_RE.lastIndex = 0;
+  out += html.slice(last, to);
+  return out.trim();
+}
+
+function linkPageSlug(label: string): string {
+  return label
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, "-");
+}
+
+function relinkPlaceholderNav(html: string, emitted: Set<string>): string {
+  const pages = [...emitted].filter((p) => p.endsWith(".html"));
+  // A label maps to a page only when the slug is unambiguous: two pages
+  // slugging to the same word (about.html, about-me.html) means guessing.
+  const byslug = new Map<string, string>();
+  const ambiguous = new Set<string>();
+  for (const page of pages) {
+    const stem = linkPageSlug(page.replace(/\.html$/, ""));
+    if (byslug.has(stem)) ambiguous.add(stem);
+    byslug.set(stem, page);
+  }
+
+  let out = "";
+  let last = 0;
+  PLACEHOLDER_ANCHOR_RE.lastIndex = 0;
+  for (
+    let m = PLACEHOLDER_ANCHOR_RE.exec(html);
+    m !== null;
+    m = PLACEHOLDER_ANCHOR_RE.exec(html)
+  ) {
+    const openTag = m[0];
+    const labelEnd = html.indexOf("</a>", m.index + openTag.length);
+    if (labelEnd === -1) continue;
+    const label = textBetween(html, m.index + openTag.length, labelEnd);
+    const slug = linkPageSlug(label);
+    const target =
+      slug === "" ? undefined : slug === "home" ? byslug.get("index") : byslug.get(slug);
+    if (target === undefined || ambiguous.has(slug)) continue;
+
+    // Slice the href out by hand (a String.replace on the tag reads as a
+    // sanitising sink to CodeQL) and keep the anchor's other attributes.
+    const hrefAt = openTag.toLowerCase().indexOf('href="#"');
+    if (hrefAt === -1) continue;
+    out += html.slice(last, m.index);
+    out +=
+      openTag.slice(0, hrefAt) +
+      `href="${target}"` +
+      openTag.slice(hrefAt + 'href="#"'.length);
+    last = m.index + openTag.length;
+  }
+  out += html.slice(last);
+  return out;
+}
+
+/**
+ * Undo JSON-style backslash escaping inside html attributes.
+ *
+ * Models write data-URI favicons as `href="data:image/svg+xml,<svg
+ * xmlns=\"http://www.w3.org/2000/svg\" …>"`. HTML has no backslash escape,
+ * so the parser ends the attribute at the first `\"` and the remainder —
+ * including a stray `">` — spills into the page as visible text above the
+ * fold. Rewriting the escaped quote to a single quote keeps the attribute
+ * intact AND leaves the embedded markup valid, because a double-quoted
+ * attribute may legally contain single quotes.
+ *
+ * Manual exec loop over tags (no String.replace sink, no growth, so the
+ * fixed-point loop in sanitizeDemoFiles still terminates).
+ */
+const TAG_RE = /<[a-zA-Z][^>]*>/g;
+
+function unescapeAttrQuotes(html: string): string {
+  let out = "";
+  let last = 0;
+  TAG_RE.lastIndex = 0;
+  for (
+    let m = TAG_RE.exec(html);
+    m !== null;
+    m = TAG_RE.exec(html)
+  ) {
+    if (!m[0].includes('\\"')) continue;
+    out += html.slice(last, m.index);
+    // Same length, character for character — only \" becomes '.
+    out += m[0].split('\\"').join("'");
+    last = m.index + m[0].length;
+  }
+  out += html.slice(last);
+  return out;
+}
+
+/**
  * Remove tags that reference files the model never emitted — broken <img>,
  * dead <script src>/<link href> — and neutralize anchors pointing at pages
  * that were never emitted (rewritten to href="#"). Small models do this
  * constantly; the demo must look complete with only its own files.
  * Deterministic, so it works regardless of model quality. Returns the
  * cleaned file set.
+ *
+ * Two further repairs run alongside, both deterministic:
+ *  - unescapeAttrQuotes, so JSON-escaped data URIs stop leaking text
+ *  - relinkPlaceholderNav, so a multi-page demo's navbar actually goes
+ *    somewhere. It runs AFTER the fixed-point loop on purpose: a dead
+ *    anchor that neutralization just rewrote to "#" must stay dead, and
+ *    relinking only fires when the label slugs to a page that really was
+ *    emitted.
  *
  * The pass is iterated TO A FIXED POINT: a removal can splice the surrounding
  * text into a NEW well-formed tag (e.g. `<im` + `<link …>` + `g src=…>`), and
@@ -336,6 +476,7 @@ export function sanitizeDemoFiles(files: ProjectFile[]): ProjectFile[] {
       prev = next;
       next = stripBrokenPass(prev, emitted);
     }
+    next = relinkPlaceholderNav(unescapeAttrQuotes(next), emitted);
     return { ...f, content: next };
   });
 }

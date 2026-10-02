@@ -208,26 +208,34 @@ describe("no-markup-sanitiser-replace", () => {
     expect(messages).toEqual([]);
   });
 
-  it("carries no unbounded wildcard between two literals (its own CodeQL trip)", () => {
-    // The first cut of the quoted-attribute shape was `/["'`][^]*=/`, and
-    // CodeQL failed THIS PR on it: "Inefficient regular expression — may
-    // cause exponential backtracking on strings containing many repetitions
-    // of '\\[\\]'". A rule whose whole point is to keep a scanner red ought
-    // not to be the thing that reds it, so the shape is two independent
-    // tests now and this pin refuses the regex form coming back.
+  it("carries no backtracking regex — the rule tripped CodeQL twice getting here", () => {
+    // CodeQL failed this very PR twice on this file: first on an unbounded
+    // wildcard between two literals in the quoted-attribute shape, then on
+    // `on(?:\[…\]|[^…])+` — an unbounded `+` wrapping an alternation that
+    // contains `*`. Both are "Inefficient regular expression". A rule whose
+    // entire purpose is to keep a scanner red must not be what reds it, and
+    // the cheap guard is a static shape check on the rule's own source.
     const source = readFileSync(
       path.resolve(process.cwd(), "eslint-rules", "markup-sanitiser-replace.mjs"),
       "utf8",
     );
-    // The flagged construct verbatim: an unbounded `[^]` (or `[\s\S]`)
-    // standing between two literals. Anything looser would trip on the
-    // `[^>]*` examples the rule's own comments legitimately quote.
-    expect(source).not.toContain("[^]*");
-    expect(source).not.toMatch(/\[\^\][^/]*?\s*[+*]/);
-    // And the shape still fires, from the pattern alone.
+    // Only the executable lines matter — the comments legitimately quote
+    // `<[^>]*>` and the original bad patterns to explain why they are gone.
+    const code = source
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("*") && !line.trim().startsWith("//"))
+      .join("\n");
+    // A `+` or `*` group whose body itself contains a quantifier.
+    expect(code).not.toMatch(/\([^()]*[+*][^()]*\)[+*]/);
+    // An unbounded wildcard class standing next to a quantifier.
+    expect(code).not.toMatch(/\[\^?\]?\*[+*]/);
+    expect(code).not.toContain("[^]*");
+    // The shapes must still fire after the rewrite.
     expect(
       lint(`const o = tag.replace(/\\s+on[a-z]+="[^"]*"/gi, "");`),
     ).toHaveLength(1);
+    expect(lint(`const o = html.replace(/data-[\\w-]+="[^"]*"/gi, "");`)).toHaveLength(1);
+    expect(lint(`const o = html.replace(/onclick="[^"]*"/gi, "");`)).toHaveLength(1);
   });
 
   it("is enabled in the shipped config, and lint is a blocking gate", () => {

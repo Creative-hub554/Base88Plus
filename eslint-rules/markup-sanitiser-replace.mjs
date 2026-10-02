@@ -57,13 +57,18 @@ const MARKUP_SHAPES = [
   },
   {
     what: "an HTML attribute (`href=`, `src=`, `onclick=`, `data-*=`)",
-    // `on…=` needs its own alternation branch: as a regex SOURCE the handler
-    // name is usually written `\s+on[a-z]+=`, where the literal `on[a-z]+`
-    // contains no attribute name at all.
+    // Three unnested regexes rather than one alternation. The obvious single
+    // form — `on(?:\[[^\]]*\]|[^\s"'=`])+` — nests an unbounded `+` around an
+    // alternation containing `*`, which is the exact shape CodeQL's
+    // inefficient-regex query flags (it did, on this file, in the first cut
+    // of this rule). The middle one covers the handler name as a regex
+    // SOURCE, where it is written `\s+on[a-z]+=` and contains no literal
+    // attribute name at all.
     test: (t) =>
-      /\b(?:href|src|action|class|style|target|rel|data-[\w-]+|on(?:\[[^\]]*\]|[^\s"'=`])+)\s*=/i.test(
-        t,
-      ),
+      /\b(?:href|src|action|class|style|target|rel)\s*=/i.test(t) ||
+      /\bdata-[\w-]{0,20}\s*=/i.test(t) ||
+      /\bon[a-z]{0,20}\s*=/i.test(t) ||
+      /\bon\[[^\]]{0,20}\]\+?\s*=/.test(t),
   },
   {
     // Attribute-by-construction: a quote AND an `=` in one pattern, with no

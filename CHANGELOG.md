@@ -23,6 +23,23 @@ process. Download zips: the
   the page so the card re-sorts into its new column. The card markup
   moved into one shared `ProjectCard` with `grid` and `board` layouts —
   the grid renders identically.
+- A lint rule that makes the CodeQL sanitiser finding impossible to
+  re-earn: `anybase/no-markup-sanitiser-replace` fails any
+  `String.replace`/`replaceAll` in `src/` whose pattern looks like markup
+  handling — a tag, an HTML attribute, an escaped quote inside a tag, an
+  HTML entity. CodeQL's `js/incomplete-multi-character-sanitization` reads
+  every such call as a sanitiser sink and has now flagged this codebase
+  three separate times (#96, then twice inside #100), each time fixed by
+  rewriting the same one-liner as a manual `exec` loop and each time
+  reintroduced by the next change. The alert did not fail anything, so
+  nothing stopped the regression; this rule fails at the line that
+  introduces it, inside the blocking `gates` job. It is pattern-shaped on
+  purpose (a name check like "is the receiver called html" is defeated by
+  naming a variable `out`), and it leaves the repo's legitimate replaces
+  alone — slug normalisation, `.html`/separator stripping, code-fence
+  trimming, whitespace collapsing, even the quote-trimming of git ref
+  paths. The fix the message names is the one that already exists in
+  `stripBrokenPass`: assemble output from slices, or use a real parser.
 
 ### Changed
 

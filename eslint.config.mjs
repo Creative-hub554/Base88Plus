@@ -12,6 +12,14 @@
  *  2. no string references to the settings file (providers.json) outside the
  *     gateway — use getSettings()/saveSettings().
  *
+ * Rule 3 lives in eslint-rules/markup-sanitiser-replace.mjs and applies to
+ * src/ only: any String.replace whose pattern looks like HTML sanitisation is
+ * the CodeQL sink js/incomplete-multi-character-sanitization, which this repo
+ * has now re-earned three times (#96, then twice inside #100). Lint fails at
+ * the offending line instead of leaving it to a code-scanning alert days
+ * later. tests/ and scripts/ are exempt so the rule's own pins — and the
+ * slug/extension .replace calls that are NOT sanitisation — still lint.
+ *
  * Targeting note: flat config only lints extensions named in some block's
  * `files`, so the main block explicitly targets ts/tsx/js/mjs — otherwise .ts
  * files are silently ignored and the rules never fire.
@@ -23,6 +31,7 @@
  */
 import js from "@eslint/js";
 import babelParser from "@babel/eslint-parser";
+import markupSanitiserReplace from "./eslint-rules/markup-sanitiser-replace.mjs";
 
 /** Rule 1: direct settings.cloudflare access (identifier form; `?.` included). */
 const RAW_CF_ACCESS = [
@@ -90,6 +99,21 @@ export default [
     },
     rules: {
       "no-restricted-syntax": ["error", ...RAW_CF_ACCESS, ...RAW_SETTINGS_FILE],
+    },
+  },
+  {
+    // Rule 3 — the markup-sanitiser replace ban. src/ is where the CodeQL
+    // finding actually lives (the demo sanitiser) and where generated-app
+    // code is assembled; scoping it there keeps the rule's own test corpus
+    // (tests/markup-sanitiser-replace.test.ts) legal.
+    files: ["src/**/*.ts", "src/**/*.tsx"],
+    plugins: {
+      anybase: {
+        rules: { "no-markup-sanitiser-replace": markupSanitiserReplace },
+      },
+    },
+    rules: {
+      "anybase/no-markup-sanitiser-replace": "error",
     },
   },
   // Baseline JS hygiene for plain-JS files only — TS files are fully

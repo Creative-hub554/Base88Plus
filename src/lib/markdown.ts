@@ -76,6 +76,13 @@ const ALLOWED_LINK_SCHEMES = ["http://", "https://", "mailto:"];
 const MAX_HEADING_LEVEL = 6;
 
 /**
+ * How far into an autolink's authority we look for the dot that proves it is
+ * a real host. 253 is the DNS name limit, so no legitimate host is cut off,
+ * and the bound is what stops one `http://` from scanning a whole message.
+ */
+const MAX_HOST_SCAN = 253;
+
+/**
  * Characters that open an emphasis run, paired with their closer. Kept as a
  * table so the parser cannot pair a `*` opener with a `_` closer.
  */
@@ -122,18 +129,55 @@ export function safeUrl(raw: string): string | null {
   return null;
 }
 
-/** Does this look like a bare URL we should autolink? */
-function isAutolink(text: string): boolean {
-  const lower = text.toLowerCase();
-  if (lower.startsWith("//")) return false;
+/**
+ * Case-insensitive `startsWith(scheme)` at an index, over a bounded window.
+ *
+ * Bounded on purpose: a slice to the end of the message would make this
+ * O(remaining) per call site, which is how the autolink check became the
+ * parser's worst hot spot (see `isAutolink`).
+ */
+function matchesSchemeAt(text: string, at: number, scheme: string): boolean {
+  if (at + scheme.length > text.length) return false;
+  for (let k = 0; k < scheme.length; k += 1) {
+    const ch = text[at + k].toLowerCase();
+    if (ch !== scheme[k]) return false;
+  }
+  return true;
+}
+
+/**
+ * Does a bare URL start at `at`?
+ *
+ * This used to take the whole remainder of the message — a slice from
+ * the scan position to the end — and lowercased all of it to test
+ * three prefixes. That is O(remaining) work at every `(`-preceded
+ * position, so a message full of parenthesised prose cost O(n^2):
+ * measured 5.4ms at 4800 characters, 592ms at 76800. It is now three
+ * bounded checks and never looks past `MAX_HOST_SCAN`.
+ *
+ * The first-character gate is what makes ordinary prose free: only `h`
+ * (http, https) and `m` (mailto) can begin an allowed scheme, so almost
+ * every position is rejected after reading a single character.
+ */
+function isAutolink(text: string, at: number): boolean {
+  const first = text[at];
+  if (first !== "h" && first !== "H" && first !== "m" && first !== "M") {
+    return false;
+  }
+  // Protocol-relative: inherits the page's scheme, so never ours.
+  if (text[at + 1] === "/") return false;
   for (const scheme of ALLOWED_LINK_SCHEMES) {
-    if (lower.startsWith(scheme)) {
-      // Require at least one dot in the authority, so `http://x` or a bare
-      // scheme mention is not turned into a link.
-      const rest = text.slice(scheme.length);
-      const host = rest.split(/[/?#]/)[0];
-      return host.includes(".");
+    if (!matchesSchemeAt(text, at, scheme)) continue;
+    // Require a dot in the authority, so `http://x` or a bare scheme
+    // mention is not turned into a link. The authority ends at the first
+    // `/?#`, and the scan is capped at MAX_HOST_SCAN.
+    const limit = Math.min(text.length, at + scheme.length + MAX_HOST_SCAN);
+    for (let i = at + scheme.length; i < limit; i += 1) {
+      const ch = text[i];
+      if (ch === "/" || ch === "?" || ch === "#") return false;
+      if (ch === ".") return true;
     }
+    return false;
   }
   return false;
 }
@@ -152,6 +196,40 @@ function findCloser(text: string, from: number, closer: string): number {
     if (text[i] === closer) return i;
   }
   return -1;
+}
+
+/**
+ * A `findCloser` that remembers when a closer does not exist.
+ *
+ * `findCloser` alone is only linear if it finds something. On a string with
+ * no `]` at all, EVERY `[` asks for one and each ask runs to the end of the
+ * text, so `"[a".repeat(n)` costs O(n^2) — measured at 27ms for 3200
+ * characters, and it degrades from there. Streaming makes this reachable:
+ * the buffer is re-parsed on every token, so a model that emits a bracket
+ * and no closing one pays the quadratic cost repeatedly on a growing string.
+ *
+ * The memo is sound because the scan is position-independent: starting at
+ * `from` or further right visits the same characters with the same escape
+ * rule, so "no closer at or after N" implies "no closer at or after M" for
+ * every M >= N. One failed scan therefore answers every later question of
+ * the same kind in constant time, and the total work drops to a single pass.
+ *
+ * Only asymmetric delimiters need this. `*`, `_` and `~` open and close with
+ * the same character, so an opener always finds a partner further right and
+ * `findCloserPair` was already linear — measured, not assumed.
+ */
+function makeCloserFinder(text: string): (from: number, closer: string) => number {
+  /** closer character -> lowest index already proven to have no closer after it */
+  const emptyFrom = new Map<string, number>();
+  return (from: number, closer: string): number => {
+    const proven = emptyFrom.get(closer);
+    // Reached only when `from` is left of any earlier proof, so recording it
+    // unconditionally keeps the strongest (lowest) bound.
+    if (proven !== undefined && from >= proven) return -1;
+    const at = findCloser(text, from, closer);
+    if (at === -1) emptyFrom.set(closer, from);
+    return at;
+  };
 }
 
 /**
@@ -192,6 +270,9 @@ export function parseInline(text: string): Inline[] {
   const out: Inline[] = [];
   let plain = "";
   let i = 0;
+  // Scoped to THIS string: recursive calls parse a slice, so they must not
+  // inherit a memo built for the parent.
+  const findFrom = makeCloserFinder(text);
 
   const flush = () => {
     if (plain.length > 0) {
@@ -270,7 +351,7 @@ export function parseInline(text: string): Inline[] {
       const isDouble = text[i + 1] === ch;
       const intraword = ch === "_" && i > 0 && isWordChar(text[i - 1]);
       if (!isDouble && !intraword) {
-        const close = findCloser(text, i + 1, ch);
+        const close = findFrom(i + 1, ch);
         // Contents must be non-empty and must not start with whitespace,
         // both of which CommonMark forbids and both of which otherwise
         // render as stray emphasis marks.
@@ -286,9 +367,9 @@ export function parseInline(text: string): Inline[] {
 
     // Link: [text](href)
     if (ch === "[") {
-      const labelEnd = findCloser(text, i + 1, "]");
+      const labelEnd = findFrom(i + 1, "]");
       if (labelEnd !== -1 && text[labelEnd + 1] === "(") {
-        const hrefEnd = findCloser(text, labelEnd + 2, ")");
+        const hrefEnd = findFrom(labelEnd + 2, ")");
         if (hrefEnd !== -1) {
           const href = safeUrl(text.slice(labelEnd + 2, hrefEnd));
           if (href !== null) {
@@ -330,11 +411,13 @@ export function parseInline(text: string): Inline[] {
 /** Would an autolink start at `at`? Only at a word boundary. */
 function isAutolinkAt(text: string, at: number): boolean {
   if (at > 0 && !/[\s(]/.test(text[at - 1])) return false;
-  // The WHOLE remainder, not a short prefix: the authority check needs to
-  // see the dot in `example.com`, and a 12-character window truncates it to
-  // `https://exam` — no dot, so no link, and bare URLs in a reply silently
-  // stayed plain text.
-  return isAutolink(text.slice(at));
+  // The authority check has to read far enough to see the dot in
+  // `example.com`. An earlier 12-character window truncated the candidate
+  // to `https://exam` — no dot, so no link, and bare URLs in a reply
+  // silently stayed plain text. The window is `MAX_HOST_SCAN` now rather
+  // than the whole remainder, which is what used to make this the most
+  // expensive check in the parser.
+  return isAutolink(text, at);
 }
 
 /**

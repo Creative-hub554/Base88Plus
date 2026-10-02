@@ -27,12 +27,23 @@ import type { ProjectFile } from "@/lib/types";
  * a demo is fresh only while its briefHash matches the current brief.
  */
 
-/** Extra instruction for template generation: concise, visual, single-page. */
+/**
+ * Extra instruction for template generation. The brief is the file plan:
+ * a demo must emit exactly the files its brief describes — a multi-page
+ * brief (SaaS site, blog) gets every page as a real .html file, never a
+ * single-page stub whose nav links 404. Size guidance is per-file so a
+ * five-file demo isn't squeezed into one 300-line page.
+ */
 const TEMPLATE_SUFFIX = `
 
-This is a TEMPLATE DEMO, so keep it focused: a single index.html plus styles.css
-(and app.js only if genuinely interactive). Prioritize a striking above-the-fold
-visual and polished section flow. Total output under ~300 lines.
+This is a TEMPLATE DEMO: emit EXACTLY the files the brief describes — no more,
+no fewer. When the brief names multiple pages (index.html, pricing.html,
+about.html, …), every page is its own file linked with plain relative paths,
+and the shared navbar/footer are duplicated per page (no build step). When it
+describes a shared data file (e.g. posts.js), emit it and have the pages read
+it. NEVER link to a file you did not emit. Keep each file focused and polished
+(roughly 100–200 lines per page): a striking above-the-fold visual and a clean
+section flow beat raw length.
 IMPORTANT: never reference image files (img src, background url) — no local
 assets and no external URLs. Draw all visuals with inline SVG or CSS shapes
 and gradients only; the demo must look complete with just its own files.`;

@@ -9,6 +9,7 @@ import {
   visibleText,
   type GateFile,
 } from "@/lib/demo-gates";
+import { TEMPLATE_SUFFIX } from "@/lib/template-generation";
 import { TEMPLATES } from "@/lib/templates";
 
 function f(path: string, content: string): GateFile {
@@ -256,5 +257,49 @@ describe("runDemoGates", () => {
     expect(formatGateProblem({ kind: "filler", detail: 'placeholder copy "Feature 1"' })).toBe(
       'filler: placeholder copy "Feature 1"',
     );
+  });
+});
+
+describe("the generation prompt stays small enough to finish", () => {
+  // This is a REGRESSION GUARD, written after the fact. Expanding the suffix
+  // from 214 to 410 words to explain the content rules at length made
+  // generations overflow the model's output budget: the response ended before
+  // closing the code fence, the extractor returned nothing, and three
+  // templates were LOST from the gallery — strictly worse than the thin demos
+  // the expansion was meant to prevent. The gates enforce; the prompt only has
+  // to make passing achievable.
+  const words = TEMPLATE_SUFFIX.split(/\s+/).filter(Boolean).length;
+
+  it("stays under a third of a thousand words", () => {
+    expect(words).toBeLessThan(300);
+  });
+
+  // The suffix must not NAME concrete files. An earlier draft listed
+  // "index.html, pricing.html, about.html, posts.js" as examples and the
+  // model emitted them for briefs that describe ONE page — the restaurant
+  // demo grew an about.html and a pricing.html it never asked for, which the
+  // selector gate then (correctly) flagged. Examples in an instruction to a
+  // generator are not examples, they are a spec.
+  it("names no page or data file, so it cannot invent pages a brief did not ask for", () => {
+    // styles.css and app.js are the two files the suffix mandates for EVERY
+    // demo, so they are the only filenames allowed to appear.
+    const named = [
+      ...new Set(TEMPLATE_SUFFIX.match(/\b[\w-]+\.(?:html|js|css|json)\b/gi) ?? []),
+    ].map((n) => n.toLowerCase());
+    expect(named.sort()).toEqual(["app.js", "styles.css"]);
+  });
+
+  it("still states every rule the gates enforce", () => {
+    for (const rule of [
+      "Emit every file the brief names", // plan gate
+      "emit that ONE page", // ...without inventing the others
+      'if (!el) return;', // selector gate
+      "hide a shared element on load", // the blank-void defect
+      "Use future dates", // the -1084d countdown
+      '"Feature 1"', // filler gate
+      "close the code fence", // truncation
+    ]) {
+      expect(TEMPLATE_SUFFIX).toContain(rule);
+    }
   });
 });

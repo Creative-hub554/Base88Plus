@@ -52,51 +52,45 @@ import type { ProjectFile } from "@/lib/types";
  * lines per page … a clean section flow beat raw length" read as an
  * instruction to be BRIEF, and five of six demos came back as 145–380
  * characters of visible text wrapped in a competent header and footer —
- * real DOM, no content. The gallery thumbnail shows a colored header, so
- * they looked finished. The suffix now asks for substance explicitly and
- * names the filler it has to reject.
+ * real DOM, no content. The suffix now asks for substance and names the
+ * filler it must reject.
+ *
+ * IT IS ALSO DELIBERATELY SHORT. Expanding it to explain all of that at
+ * length (410 words, up from 214) made generations overflow the model's
+ * output budget: the response ended before closing the code fence, the
+ * extractor returned nothing, and THREE templates were lost from the
+ * gallery — a worse outcome than the thin demos it was meant to prevent.
+ * The gates enforce; the prompt only has to make passing achievable. So
+ * the rules are stated once each, in the fewest words that keep them
+ * unambiguous, and the budget line tells the model to finish what it
+ * starts rather than keep elaborating.
  */
-const TEMPLATE_SUFFIX = `
+export const TEMPLATE_SUFFIX = `
 
-This is a TEMPLATE DEMO. Emit every page the brief describes — when it names
-index.html, pricing.html, about.html, …, each is its own file linked with
-plain relative paths, and the shared navbar/footer are duplicated per page
-(no build step). When it describes a shared data file (e.g. posts.js), emit
-it and have the pages read it. NEVER link to a file you did not emit.
+This is a TEMPLATE DEMO. Emit every file the brief names — each page the
+brief describes, and any shared data file it mentions, as its own file
+linked with plain relative paths, with the navbar/footer duplicated per page
+(no build step). If the brief describes a single page, emit that ONE page.
+Never link a file you did not emit.
 
-WRITE REAL CONTENT. Every section the brief lists must actually exist and
-carry real copy: a headline, a sentence or two of body text, a label a real
-person would write. Never ship placeholders — "Feature 1", "Integration 2",
-"Project 3", "Sponsor 1", "Lorem ipsum", "your text here" are all failed
-demos. A page whose body is a list of numbered nouns is worse than no page.
-A portfolio grid means six DIFFERENT projects with different names,
-descriptions and categories; a schedule means real session titles; a pricing
-table means real plan names and prices. Invent the specifics — plausible
-names, dates, prices, quotes — because that specificity IS the demo.
+Write REAL content: every section the brief lists exists and carries real
+copy — actual names, dates, prices, quotes. "Feature 1", "Project 2",
+"Lorem ipsum" and "your text here" are failed demos; a six-card grid means
+six DIFFERENT projects, not "Project 1" through "Project 6".
 
-Ship a real stylesheet with every demo: one styles.css holding the design
-system (custom properties in :root, a deliberate palette, a type scale with
-clamp(), grid/flex layout), linked from EVERY page. Unstyled markup is a
-failed demo — a page that renders as browser-default HTML does not show off
-anything. Interactive behavior belongs in one app.js, also linked from every
-page. Keep each file focused and polished (roughly 100–200 lines per page):
-a striking above-the-fold visual and a clean section flow beat raw length.
+Ship one styles.css (design system in :root, deliberate palette, type scale
+with clamp(), grid/flex) linked from every page, and one app.js linked from
+every page. app.js runs on EVERY page, so guard each lookup —
+const el = document.querySelector('#x'); if (!el) return; — or the pages
+missing that element throw and silently kill every handler after it. Never
+hide a shared element on load (a page with no toggle renders a blank void).
+Use future dates.
 
-Because app.js is loaded on EVERY page, every element it looks up must exist
-on every page OR be guarded: write
-    const el = document.querySelector('#thing');
-    if (!el) return;
-An unguarded lookup throws on the pages that lack the element and silently
-kills every handler after it. The same applies to hiding a shared element
-(unless you toggle it, do not set display:none on load — a page with no
-toggle will render a blank void). Use dates in the future for any event or
-deadline.
+No image files and no external URLs: draw visuals with inline SVG or CSS
+gradients. Never inline a base64 raster image.
 
-IMPORTANT: never reference image files (img src, background url) — no local
-assets and no external URLs. Draw all visuals with inline SVG or CSS shapes
-and gradients only; the demo must look complete with just its own files.
-Never inline a base64-encoded raster image (a data:image/png;base64 blob) —
-it bloats the file past every useful limit; use inline SVG or CSS gradients.`;
+Keep the whole output under ~500 lines and close the code fence — finishing
+every file matters more than elaborating any one of them.`;
 
 /**
  * Reject a demo whose html is truncated or unstyled: no <body>, or no
@@ -491,6 +485,7 @@ async function generateTemplateFiles(
   generation: Awaited<ReturnType<typeof resolveGenerationFor>>,
 ): Promise<ProjectFile[] | null> {
   const prompt = `${template.brief}${TEMPLATE_SUFFIX}`;
+  let lastRejection: string | null = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const result = streamText({
@@ -509,24 +504,32 @@ async function generateTemplateFiles(
         // first-page thumbnail: does it navigate, does it ship the pages the
         // brief names, and does its own JS run against its own HTML.
         if (!demoNavIsWired(clean)) {
-          console.log(
-            `[templates] ${template.id}: attempt ${attempt + 1} nav gate — ${formatDemoLinkAudit(auditDemoLinks(clean))}`,
-          );
+          lastRejection = `nav gate — ${formatDemoLinkAudit(auditDemoLinks(clean))}`;
+          console.log(`[templates] ${template.id}: attempt ${attempt + 1} ${lastRejection}`);
           continue;
         }
         const gates = runDemoGates(template.brief, clean);
         if (gates.ok) return clean;
-        console.log(
-          `[templates] ${template.id}: attempt ${attempt + 1} quality gates — ${formatGateResult(gates)}`,
-        );
+        lastRejection = `quality gates — ${formatGateResult(gates)}`;
+        console.log(`[templates] ${template.id}: attempt ${attempt + 1} ${lastRejection}`);
         continue;
       }
+      lastRejection = null;
       console.log(
         `[templates] ${template.id}: degenerate attempt ${attempt + 1}`,
       );
     } catch (err) {
       console.error(`[templates] ${template.id}: generation error`, err);
     }
+  }
+  // A gate rejection produced FILES. Reporting "Generation produced no files"
+  // for it told the user to try a stronger model when the real answer is
+  // that the demo missed a rule — and hid the reason the template vanished
+  // from the gallery.
+  if (lastRejection) {
+    throw new Error(
+      `Demo rejected by the ${lastRejection.split(" — ")[0]} — ${lastRejection}`,
+    );
   }
   return null;
 }

@@ -8,14 +8,8 @@ import { ImportZipButton } from "@/components/import-button";
 import { ProjectCard } from "@/components/project-card";
 import { ToastHost } from "@/components/toast";
 import { projectMatchesTag } from "@/lib/tags";
-import type { Project } from "@/lib/types";
-import {
-  PROJECT_STATUSES,
-  STATUS_DOT,
-  isProjectStatus,
-  statusMatches,
-  type ProjectStatus,
-} from "@/lib/status";
+import { groupByStatus } from "@/lib/board";
+import { STATUS_DOT, statusMatches } from "@/lib/status";
 
 export const dynamic = "force-dynamic";
 
@@ -70,40 +64,35 @@ export default async function HomePage({
     getProjectModelInfo().map((pj) => [pj.projectId, pj] as const),
   );
 
-  // Board grouping: the three enum columns are always present (an empty
-  // column is information — "nothing is building"), and unstatused
-  // projects get a trailing "No status" column only when one exists.
-  const boardColumns: {
-    status: ProjectStatus | undefined;
-    label: string;
-    projects: Project[];
-  }[] = PROJECT_STATUSES.map((status) => ({
-    status,
-    label: status,
-    projects: projects.filter((p) => statusMatches(p.status, status)),
-  }));
-  const unstatused = projects.filter(
-    (p) => !(p.status && isProjectStatus(p.status)),
+  // Publish state is resolved ONCE here — a manifest read is a disk
+  // read — not per card render.
+  const publishedSlugs = new Map(
+    projects
+      .map((p) => [p.id, getPublishManifest(p.id)?.slug] as const)
+      .filter(([, slug]) => Boolean(slug)),
   );
-  if (unstatused.length > 0) {
-    boardColumns.push({
-      status: undefined,
-      label: "No status",
-      projects: unstatused,
-    });
-  }
+
+  // Board grouping is a pure, tested helper (lib/board.ts): the three
+  // enum columns always present in order, unstatused trailing only when
+  // non-empty.
+  const boardColumns = groupByStatus(projects);
 
   // The toggle preserves an active filter (board + ?tag= is a valid deep
   // link). The grid link stays plain "/" when unfiltered so it doubles
   // as the filter-clear; the board link always carries view=board.
-  const filterQs = [
-    activeTag && `tag=${encodeURIComponent(activeTag)}`,
-    activeStatus && `status=${encodeURIComponent(activeStatus)}`,
-  ]
-    .filter(Boolean)
-    .join("&");
-  const gridHref = filterQs ? `/?${filterQs}` : "/";
-  const boardHref = filterQs ? `/?${filterQs}&view=board` : "/?view=board";
+  const toggleParams = new URLSearchParams();
+  if (activeTag) toggleParams.set("tag", activeTag);
+  if (activeStatus) toggleParams.set("status", activeStatus);
+  const gridHref = hasFilter ? `/?${toggleParams}` : "/";
+  toggleParams.set("view", "board");
+  const boardHref = `/?${toggleParams}`;
+
+  const toggleClass = (active: boolean) =>
+    `rounded-md px-2.5 py-1 text-xs transition ${
+      active
+        ? "bg-neutral-800 text-white"
+        : "text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200"
+    }`;
 
   return (
     <main className="mx-auto max-w-5xl px-6 py-16">
@@ -160,11 +149,7 @@ export default async function HomePage({
               href={gridHref}
               data-testid="view-grid-link"
               aria-current={boardView ? undefined : "page"}
-              className={`rounded-md px-2.5 py-1 text-xs transition ${
-                boardView
-                  ? "text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200"
-                  : "bg-neutral-800 text-white"
-              }`}
+              className={toggleClass(!boardView)}
             >
               Grid
             </Link>
@@ -172,11 +157,7 @@ export default async function HomePage({
               href={boardHref}
               data-testid="view-board-link"
               aria-current={boardView ? "page" : undefined}
-              className={`rounded-md px-2.5 py-1 text-xs transition ${
-                boardView
-                  ? "bg-neutral-800 text-white"
-                  : "text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200"
-              }`}
+              className={toggleClass(boardView)}
             >
               Board
             </Link>
@@ -245,7 +226,7 @@ export default async function HomePage({
                 className="min-w-0"
                 data-testid={`board-column-${col.status ?? "none"}`}
               >
-                <div className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-neutral-400">
+                <h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-neutral-400">
                   {col.status && (
                     <span
                       aria-hidden
@@ -258,14 +239,14 @@ export default async function HomePage({
                       ({col.projects.length})
                     </span>
                   </span>
-                </div>
+                </h3>
                 <ul className="space-y-2">
                   {col.projects.map((p) => (
                     <ProjectCard
                       key={p.id}
                       project={p}
                       layout="board"
-                      published={Boolean(getPublishManifest(p.id)?.slug)}
+                      published={publishedSlugs.has(p.id)}
                     />
                   ))}
                 </ul>
@@ -278,7 +259,7 @@ export default async function HomePage({
               <ProjectCard
                 key={p.id}
                 project={p}
-                published={Boolean(getPublishManifest(p.id)?.slug)}
+                published={publishedSlugs.has(p.id)}
                 modelId={modelByProject.get(p.id)?.modelId}
               />
             ))}

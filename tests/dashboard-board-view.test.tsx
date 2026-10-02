@@ -79,28 +79,46 @@ afterEach(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-/** Seed three projects and render the dashboard with the given params. */
+/**
+ * Seed three projects and render the dashboard with the given params.
+ * Seeding is IDEMPOTENT: tests that render twice against one store (a
+ * filter change is a URL, not new data) reuse the same trio instead of
+ * stacking duplicate "Beta App" records into the columns.
+ */
 async function renderSeeded(
   filter?: { tag?: string; status?: string; view?: string },
+  opts?: { extraName?: string },
 ): Promise<{ betaId: string }> {
   const store = await import("../src/lib/store");
   const { default: HomePage } = await import("../src/app/page");
-  const alpha = store.createProject("Alpha App", "first");
-  store.setProjectMeta(alpha.id, { tags: "recipes, fast", status: "shipped" });
-  const beta = store.createProject("Beta App", "second");
-  store.setProjectMeta(beta.id, { tags: "slow", status: "building" });
-  store.createProject("Gamma App", "");
+  const existingBeta = store
+    .listProjects()
+    .find((p) => p.name === "Beta App");
+  let betaId: string;
+  if (existingBeta) {
+    betaId = existingBeta.id;
+  } else {
+    const alpha = store.createProject("Alpha App", "first");
+    store.setProjectMeta(alpha.id, { tags: "recipes, fast", status: "shipped" });
+    const beta = store.createProject("Beta App", "second");
+    store.setProjectMeta(beta.id, { tags: "slow", status: "building" });
+    store.createProject("Gamma App", "");
+    if (opts?.extraName) store.createProject(opts.extraName, "");
+    betaId = beta.id;
+  }
   const ui = await HomePage({
     searchParams: Promise.resolve(filter ?? {}),
   });
   render(ui);
-  return { betaId: beta.id };
+  return { betaId };
 }
 
+/** Exact-name membership: a project named "Alpha App 2" must never
+ * satisfy a lookup for "Alpha App" (no substring false-positives). */
 function columnHas(column: string, name: string): boolean {
   return (
-    screen.getByTestId(`board-column-${column}`).textContent?.includes(name) ??
-    false
+    within(screen.getByTestId(`board-column-${column}`)).queryByText(name) !==
+    null
   );
 }
 
@@ -136,6 +154,16 @@ describe("board view", () => {
     expect(screen.getByTestId("board-column-idea").textContent).toContain(
       "(0)",
     );
+  });
+
+  it("column membership is exact, not a substring match", async () => {
+    // "Gamma App 2" shares a prefix with "Gamma App"; the helper must
+    // match whole node text, so both cards stay distinct in the column.
+    await renderSeeded({ view: "board" }, { extraName: "Gamma App 2" });
+    const none = within(screen.getByTestId("board-column-none"));
+    expect(none.getAllByText("Gamma App")).toHaveLength(1);
+    expect(none.getByText("Gamma App 2")).toBeTruthy();
+    expect(screen.getByTestId("board-column-none").textContent).toContain("(2)");
   });
 
   it("the view match is exact: 'BOARD' and 'grid' fall back to the default grid", async () => {

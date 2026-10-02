@@ -24,6 +24,18 @@ process. Download zips: the
   moved into one shared `ProjectCard` with `grid` and `board` layouts —
   the grid renders identically.
 
+### Changed
+
+- Refactor of the board-view internals, behavior-preserving: the column
+  grouping moved into a pure, unit-tested `groupByStatus` helper
+  (`src/lib/board.ts`) instead of triple-filtering with the case-agnostic
+  `statusMatches` per column; the view toggle builds its hrefs with
+  `URLSearchParams` instead of hand-rolled string concatenation; publish
+  state is resolved once per render into a map instead of a disk read per
+  card; and the board column headers are real `h3` elements. The shared
+  "No status" label is now one constant used by the card select and the
+  board column alike.
+
 ### Fixed
 
 - Clearing a project status actually works: the card select's "No

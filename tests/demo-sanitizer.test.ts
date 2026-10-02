@@ -185,3 +185,104 @@ describe("demoLooksComplete", () => {
     ).toBe(false);
   });
 });
+
+describe("sanitizeDemoFiles: placeholder nav relinking", () => {
+  it("points a '#' nav label at the page it names", () => {
+    const html = '<nav><a class="link" href="#">Pricing</a></nav>';
+    const out = sanitizeDemoFiles([
+      pf("index.html", html),
+      pf("pricing.html", "<html><body>pricing</body></html>"),
+    ]);
+    expect(out[0].content).toContain('href="pricing.html"');
+    expect(out[0].content).not.toContain('href="#"');
+    // the anchor keeps its other attributes
+    expect(out[0].content).toContain('class="link"');
+  });
+
+  it("maps Home to index.html", () => {
+    const out = sanitizeDemoFiles([
+      pf("about.html", '<a href="#">Home</a>'),
+      pf("index.html", "<html><body>x</body></html>"),
+    ]);
+    expect(out[0].content).toContain('href="index.html"');
+  });
+
+  it("leaves an in-page anchor that names no page alone", () => {
+    const out = sanitizeDemoFiles([
+      pf("index.html", '<a href="#">Skip to content</a>'),
+      pf("pricing.html", "<html><body>p</body></html>"),
+    ]);
+    expect(out[0].content).toContain('href="#"');
+  });
+
+  // A dead anchor neutralized to "#" must stay dead: relinking runs after
+  // neutralization and only fires for pages that really were emitted.
+  it("does not resurrect a neutralized dead anchor", () => {
+    const out = sanitizeDemoFiles([
+      pf("index.html", '<a href="pricing.html">Pricing</a>'),
+      pf("styles.css", "body{}"),
+    ]);
+    expect(out[0].content).toContain('href="#"');
+  });
+
+  it("leaves an ambiguous slug alone rather than guessing", () => {
+    // about-us.html and about_us.html both slug to "about-us"; picking
+    // either one would be a coin flip, so the placeholder stays.
+    const out = sanitizeDemoFiles([
+      pf("index.html", '<a href="#">About Us</a>'),
+      pf("about-us.html", "<html><body>a</body></html>"),
+      pf("about_us.html", "<html><body>b</body></html>"),
+    ]);
+    expect(out[0].content).toContain('href="#"');
+  });
+
+  // The real saas case: a whole navbar of placeholders, each label naming
+  // a page that was emitted.
+  it("relinks every label of a multi-item navbar to its own page", () => {
+    const nav =
+      '<a href="#">Home</a><a href="#">Pricing</a><a href="#">About</a><a href="#">Contact</a>';
+    const out = sanitizeDemoFiles([
+      pf("index.html", nav),
+      pf("pricing.html", "<html><body>p</body></html>"),
+      pf("about.html", "<html><body>a</body></html>"),
+      pf("contact.html", "<html><body>c</body></html>"),
+    ]);
+    expect(out[0].content).toContain('href="index.html"');
+    expect(out[0].content).toContain('href="pricing.html"');
+    expect(out[0].content).toContain('href="about.html"');
+    expect(out[0].content).toContain('href="contact.html"');
+    expect(out[0].content).not.toContain('href="#"');
+  });
+
+  // Matching is exact on the slug: "About Us" is not about.html.
+  it("does not fuzzy-match a label to a differently-named page", () => {
+    const out = sanitizeDemoFiles([
+      pf("index.html", '<a href="#">About Us</a>'),
+      pf("about.html", "<html><body>a</body></html>"),
+    ]);
+    expect(out[0].content).toContain('href="#"');
+  });
+
+  it("does not relink inside a single-page demo", () => {
+    const out = sanitizeDemoFiles([pf("index.html", '<a href="#">Pricing</a>')]);
+    expect(out[0].content).toContain('href="#"');
+  });
+});
+
+describe("sanitizeDemoFiles: JSON-escaped attribute quotes", () => {
+  it("rewrites escaped quotes inside a data-URI favicon", () => {
+    const html =
+      '<link rel="icon" href="data:image/svg+xml,<svg xmlns=\\"http://www.w3.org/2000/svg\\" viewBox=\\"0 0 24 24\\">';
+    const out = sanitizeDemoFiles([pf("index.html", html)]);
+    expect(out[0].content).not.toContain('\\"');
+    expect(out[0].content).toContain(
+      "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>",
+    );
+  });
+
+  it("leaves ordinary html untouched", () => {
+    const html = '<a href="index.html" class="x">Hi</a><p>plain "quoted" text</p>';
+    const out = sanitizeDemoFiles([pf("index.html", html)]);
+    expect(out[0].content).toContain('class="x"');
+  });
+});

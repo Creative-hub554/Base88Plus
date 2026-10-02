@@ -59,6 +59,26 @@ process. Download zips: the
   never unset. The empty string now clears the status (the same
   contract as the tags field), and only non-empty unknown values are
   rejected with the 400 value list.
+- Template demo pages have working navigation. Every page the model emitted
+  still carried `href="#"` for its own nav links, so a promoted SaaS
+  project had four real pages — index, pricing, about, contact — and a
+  navbar that went nowhere. Placeholder anchors are now relinked to the
+  emitted page whose slug matches the link's label text (`Home` ->
+  `index.html`, `Pricing` -> `pricing.html`); other attributes survive, and
+  an ambiguous or unmatched label is left dead rather than guessed at.
+- JSON-escaped quotes no longer leak as visible text. When the model wrote
+  an HTML attribute containing `\"` (a data-URI `<link rel="icon">` is the
+  usual trigger) the parser closed the attribute at the first backslash and
+  spilled the rest of the tag into the page as body text. Escaped quotes
+  inside tags are rewritten to single quotes, which are legal inside a
+  double-quoted attribute and keep the embedded markup intact.
+- `**bold**` in a chat message renders as bold. The assistant's opening
+  message on a promoted project showed its literal asterisks; assistant
+  text now renders inline bold (user messages stay verbatim).
+- Promoting a template repairs historical demos. The sanitiser now also
+  runs on the cached demo files as they are copied into the new project, so
+  every template generated before these fixes comes out repaired rather
+  than needing a regeneration.
 
 ## [0.10.0] — 2026-10-01
 

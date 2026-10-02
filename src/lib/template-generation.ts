@@ -221,14 +221,20 @@ export async function generateTemplateDemoOrThrow(
  * (/pricing) would leave the demo entirely — a static multi-page site can
  * only navigate among its own emitted files.
  *
- * ONE alternation replace handles all four tag shapes (a chained set of
+ * ONE alternation regex matches all four tag shapes (a chained set of
  * one-shot replaces would let an earlier deletion splice the text into a
- * NEW well-formed tag the later passes never see), and replacements are
- * always "", the original match, or a same-length-or-shorter rewrite, so a
- * pass never grows the string.
+ * NEW well-formed tag the later passes never see). The pass is a MANUAL
+ * exec loop that builds the output from segments — inter-match text is
+ * appended verbatim, and each match is appended whole, dropped, or
+ * replaced by a synthesized constant. No String.replace sanitization:
+ * output is assembled from slices, so no pass ever grows the string and
+ * the matcher never sees text it produced.
  */
 const BROKEN_TAG_RE =
   /[ \t]*(?:<img\b[^>]*\bsrc=["']([^"'#]+)["'][^>]*>|<script\b[^>]*\bsrc=["']([^"'#]+)["'][^>]*>\s*<\/script>|<link\b[^>]*\bhref=["']([^"'#]+)["'][^>]*>|<a\b[^>]*\bhref=["']([^"'#]+)["'][^>]*>)[ \t]*\n?/gi;
+
+/** The replacement for a dead anchor: a synthesized minimal open tag. */
+const NEUTRAL_ANCHOR = '<a href="#">';
 
 function stripBrokenPass(html: string, emitted: Set<string>): string {
   // Assets: root-relative targets may resolve same-origin, so they keep.
@@ -238,30 +244,42 @@ function stripBrokenPass(html: string, emitted: Set<string>): string {
   // itself, so /pricing would 404 exactly like a missing file.
   const keepAnchor = (target: string): boolean =>
     /^(https?:|data:|mailto:|tel:|#)/.test(target);
-  return html.replace(
-    BROKEN_TAG_RE,
-    (tag, imgSrc: string, scriptSrc: string, linkHref: string, anchorHref: string) => {
-      if (anchorHref !== undefined) {
-        if (keepAnchor(anchorHref)) return tag;
-        // Compare the path part only — fragments and query strings ride
-        // along on an emitted page (post.html#intro, post.html?id=2).
-        const filePath = anchorHref.split("#")[0].split("?")[0].trim();
-        if (filePath && emitted.has(filePath)) return tag;
-        // Dead anchor: neutralize with a fully SYNTHESIZED minimal open
-        // tag. Never return a rewritten copy of the matched text — a
-        // modified tag could still carry `<script` inside another
-        // attribute's value, and the fixed-point loop cannot remove what
-        // a rewrite deliberately keeps (CodeQL
-        // js/incomplete-multi-character-sanitization). The link's label
-        // text and closing </a> live outside this match and survive; the
-        // dead link loses its styling attributes, which is fine — it is
-        // dead.
-        return '<a href="#">';
+
+  let out = "";
+  let last = 0;
+  BROKEN_TAG_RE.lastIndex = 0;
+  for (
+    let m = BROKEN_TAG_RE.exec(html);
+    m !== null;
+    m = BROKEN_TAG_RE.exec(html)
+  ) {
+    out += html.slice(last, m.index);
+    last = m.index + m[0].length;
+    const [tag, imgSrc, scriptSrc, linkHref, anchorHref] = m;
+    if (anchorHref !== undefined) {
+      if (keepAnchor(anchorHref)) {
+        out += tag;
+        continue;
       }
-      const target = imgSrc ?? scriptSrc ?? linkHref;
-      return keepAsset(target) ? tag : "";
-    },
-  );
+      // Compare the path part only — fragments and query strings ride
+      // along on an emitted page (post.html#intro, post.html?id=2).
+      const filePath = anchorHref.split("#")[0].split("?")[0].trim();
+      if (filePath && emitted.has(filePath)) {
+        out += tag;
+        continue;
+      }
+      // Dead anchor: the synthesized minimal open tag. The link's label
+      // text and closing </a> live outside this match and survive; the
+      // dead link loses its styling attributes, which is fine — it is
+      // dead.
+      out += NEUTRAL_ANCHOR;
+      continue;
+    }
+    const target = imgSrc ?? scriptSrc ?? linkHref;
+    if (keepAsset(target)) out += tag;
+  }
+  out += html.slice(last);
+  return out;
 }
 
 /**

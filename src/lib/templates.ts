@@ -63,10 +63,10 @@ export const TEMPLATES: TemplateDef[] = [
   {
     id: "blog",
     name: "Blog",
-    tagline: "Post grid, single-post view, categories, newsletter",
+    tagline: "Post grid, single-post view, categories, reading time",
     appName: "Blog",
     brief:
-      "A clean multi-page blog: index.html with a featured post and a post grid; post.html reading a shared posts.js data file and rendering the selected post; about page; newsletter signup with validation. Category filtering, reading-time labels, and a typographic, readable layout.",
+      "A clean multi-page blog: index.html with a featured post and a category-filterable post grid; post.html reading a shared posts.js data file and rendering the selected post by ?id; about.html. Posts carry reading-time labels and the layout is typographic and readable.",
     gradient: "from-lime-400 via-green-500 to-emerald-600",
   },
 ];

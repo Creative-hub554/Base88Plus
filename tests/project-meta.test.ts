@@ -150,13 +150,25 @@ describe("project meta — store kernel (setProjectMeta)", () => {
     // Enum-violations throw (case included — the enum is lowercase).
     // (A padded valid value like " building " does NOT throw: the store
     // trims first, consistent with every other meta field.)
-    for (const bad of ["Shipped", "SHIPPED", "done", "", "   "]) {
+    for (const bad of ["Shipped", "SHIPPED", "done"]) {
       expect(() => store.setProjectMeta(p.id, { status: bad })).toThrow(
         /invalid status/i,
       );
     }
     // Nothing changed by the rejected writes (last accepted = loop's final).
     expect(store.getProject(p.id)?.status).toBe("shipped");
+
+    // The empty string is NOT an enum violation — it CLEARS the status
+    // (same contract as tags; the card select's "No status" option is a
+    // real destination, and the board renders it as a column).
+    const cleared = store.setProjectMeta(p.id, { status: "" });
+    expect(cleared.status).toBeUndefined();
+    expect(store.getProject(p.id)?.status).toBeUndefined();
+    // Re-set after a clear still works.
+    expect(store.setProjectMeta(p.id, { status: "idea" }).status).toBe("idea");
+    // Whitespace-only counts as empty after the store's trim — clearing,
+    // not throwing, consistent with every other meta field.
+    expect(store.setProjectMeta(p.id, { status: "   " }).status).toBeUndefined();
   });
 
   it("rejects an empty name and unknown projects; caps overlong values", async () => {

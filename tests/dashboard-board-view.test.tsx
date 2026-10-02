@@ -215,6 +215,31 @@ describe("board view", () => {
     );
   });
 
+  it("selecting the select's own 'No status' option clears via an empty-string PATCH (200, not 400)", async () => {
+    const { betaId } = await renderSeeded({ view: "board" });
+    const bodies: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+        bodies.push(init?.body ? JSON.parse(String(init.body)) : null);
+        return new Response(
+          JSON.stringify({ project: { id: betaId, status: "" } }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }),
+    );
+    const building = within(screen.getByTestId("board-column-building"));
+    fireEvent.click(building.getByTestId("card-status-button"));
+    fireEvent.change(building.getByTestId("card-status-select"), {
+      target: { value: "" },
+    });
+    fireEvent.click(building.getByTestId("card-status-save"));
+
+    await waitFor(() => expect(bodies[0]).toEqual({ status: "" }));
+    // The refresh is what re-sorts the card into the No status column.
+    expect(refreshMock).toHaveBeenCalled();
+  });
+
   it("a status save on a GRID card never refreshes (the card does not move)", async () => {
     await renderSeeded();
     vi.stubGlobal(

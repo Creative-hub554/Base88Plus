@@ -12,8 +12,9 @@ import { getProject, setProjectMeta } from "@/lib/store";
  *
  * Body: { name?: string, description?: string, tags?: string,
  * status?: string } — at least one required. Tags are one comma-separated
- * string (store splits/trims/joins); status must be one of the
- * `PROJECT_STATUSES` enum values (400 with the value list otherwise).
+ * string (store splits/trims/joins); status must be empty (clears it) or
+ * one of the `PROJECT_STATUSES` enum values (400 with the value list
+ * otherwise).
  * 200 → { project }  full updated record (updatedAt bumped by the store)
  * 400 → { error }    bad JSON / empty patch / wrong types / bad status
  * 404 → { error }    unknown project

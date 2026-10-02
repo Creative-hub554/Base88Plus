@@ -291,12 +291,19 @@ export function setProjectMeta(
   }
   if (patch.status !== undefined) {
     const status = patch.status.trim();
-    if (!isProjectStatus(status)) {
+    if (!status) {
+      // The empty string CLEARS the status — same contract as the tags
+      // field above. The card select's "No status" option is a real
+      // destination (the board view renders it as a column), not an
+      // enum violation; only non-empty unknown values are rejected.
+      delete p.status;
+    } else if (!isProjectStatus(status)) {
       throw new Error(
         `Invalid status — must be one of: ${PROJECT_STATUSES.join(", ")}`,
       );
+    } else {
+      p.status = status;
     }
-    p.status = status;
   }
   p.updatedAt = new Date().toISOString();
   fs.writeFileSync(

@@ -100,7 +100,7 @@ jobs:
       # Schedule runs, or a default-branch dispatch with the test-fire
       # input: the deploy-key push must never run from any other ref.
       # Push/PR runs keep zero credentials beyond the read-only GITHUB_TOKEN.
-      - uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
+      - uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
         if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.force_snapshot_refresh == true)
         with:
           ssh-private-key: ${{ secrets.DEPLOY_KEY_PEM }}

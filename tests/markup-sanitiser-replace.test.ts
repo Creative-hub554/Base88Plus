@@ -63,8 +63,64 @@ function stripComments(source: string): string {
     .join("\n");
 }
 
-/** A regex literal in the rule module's source (no `/` or newline inside). */
-const REGEX_LITERAL = /\/(?:\\.|[^/\\\n])+\/[gimsuy]*/g;
+/**
+ * Pull every regex literal out of source text, as plain strings.
+ *
+ * A hand-written scan, not a pattern: CodeQL's inefficient-regex query
+ * flagged the regex that used to do this (a nested quantifier, the very
+ * thing the rule module now avoids), so the test gets the same treatment.
+ * Tracks escapes and character classes so a `/` inside either is not
+ * mistaken for the closing delimiter.
+ */
+function regexLiterals(source: string): string[] {
+  const found: string[] = [];
+  let i = 0;
+  while (i < source.length) {
+    if (source[i] !== "/" || source[i + 1] === "/") {
+      i += source[i] === "/" ? 2 : 1;
+      continue;
+    }
+    let j = i + 1;
+    let inClass = false;
+    let closed = false;
+    while (j < source.length) {
+      const d = source[j];
+      if (d === "\n") break;
+      if (d === "\\") { j += 2; continue; }
+      if (d === "[") inClass = true;
+      else if (d === "]") inClass = false;
+      else if (d === "/" && !inClass) { closed = true; break; }
+      j += 1;
+    }
+    if (!closed) { i += 1; continue; }
+    let k = j + 1;
+    while (k < source.length && /[a-z]/.test(source[k])) k += 1;
+    found.push(source.slice(i, k));
+    i = k;
+  }
+  return found;
+}
+
+/**
+ * Remove `[...]` class bodies, honouring escapes: `?` inside
+ * `[A-Za-z!?(]` is a literal character, `?` after it is a quantifier.
+ */
+function stripCharClasses(text: string): string {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === "\\") {
+      out += text[i] + (text[i + 1] ?? "");
+      i += 2;
+      continue;
+    }
+    if (text[i] !== "[") { out += text[i]; i += 1; continue; }
+    i += 1;
+    while (i < text.length && text[i] !== "]" && text[i] !== "\n") i += 1;
+    i += 1;
+  }
+  return out;
+}
 
 describe("no-markup-sanitiser-replace", () => {
   describe("fires on the markup shapes CodeQL reads as a sanitiser sink", () => {
@@ -242,7 +298,7 @@ describe("no-markup-sanitiser-replace", () => {
     // Comments are stripped because the rule's prose legitimately quotes
     // `<[^>]*>`, the alternation CodeQL rejected, and the slug patterns it
     // must NOT flag — in order to explain why each shape exists.
-    const literals = [...code.matchAll(REGEX_LITERAL)];
+    const literals = regexLiterals(code);
     expect(literals.length).toBeGreaterThan(0);
     for (const { 0: literal } of literals) {
       // A path fragment, not a pattern — the import comment survives the
@@ -255,10 +311,7 @@ describe("no-markup-sanitiser-replace", () => {
       // inside `[A-Za-z!?(]` is a literal character, and the shape must
       // keep it. So drop the class bodies before counting.
       const body = literal.slice(1, literal.lastIndexOf("/"));
-      const outside = body.replace(
-        /\[(?:\\.|[^\]])*\]/g,
-        "",
-      );
+      const outside = stripCharClasses(body);
       expect(outside.includes("*")).toBe(false);
       expect(outside.includes("+")).toBe(false);
       expect(outside.includes("?")).toBe(false);

@@ -23,6 +23,7 @@ import {
   pageForLabel,
   textBetween,
 } from "@/lib/demo-link-audit";
+import { formatGateResult, runDemoGates } from "@/lib/demo-gates";
 import type { ProjectFile } from "@/lib/types";
 
 /**
@@ -46,6 +47,14 @@ import type { ProjectFile } from "@/lib/types";
  * no brief names a stylesheet, so "no more, no fewer" talked the model out
  * of the one file that carries the entire visual design. The suffix
  * therefore mandates the design system explicitly.
+ *
+ * The length guidance was the other half of the same failure. "100–200
+ * lines per page … a clean section flow beat raw length" read as an
+ * instruction to be BRIEF, and five of six demos came back as 145–380
+ * characters of visible text wrapped in a competent header and footer —
+ * real DOM, no content. The gallery thumbnail shows a colored header, so
+ * they looked finished. The suffix now asks for substance explicitly and
+ * names the filler it has to reject.
  */
 const TEMPLATE_SUFFIX = `
 
@@ -55,6 +64,16 @@ plain relative paths, and the shared navbar/footer are duplicated per page
 (no build step). When it describes a shared data file (e.g. posts.js), emit
 it and have the pages read it. NEVER link to a file you did not emit.
 
+WRITE REAL CONTENT. Every section the brief lists must actually exist and
+carry real copy: a headline, a sentence or two of body text, a label a real
+person would write. Never ship placeholders — "Feature 1", "Integration 2",
+"Project 3", "Sponsor 1", "Lorem ipsum", "your text here" are all failed
+demos. A page whose body is a list of numbered nouns is worse than no page.
+A portfolio grid means six DIFFERENT projects with different names,
+descriptions and categories; a schedule means real session titles; a pricing
+table means real plan names and prices. Invent the specifics — plausible
+names, dates, prices, quotes — because that specificity IS the demo.
+
 Ship a real stylesheet with every demo: one styles.css holding the design
 system (custom properties in :root, a deliberate palette, a type scale with
 clamp(), grid/flex layout), linked from EVERY page. Unstyled markup is a
@@ -62,6 +81,16 @@ failed demo — a page that renders as browser-default HTML does not show off
 anything. Interactive behavior belongs in one app.js, also linked from every
 page. Keep each file focused and polished (roughly 100–200 lines per page):
 a striking above-the-fold visual and a clean section flow beat raw length.
+
+Because app.js is loaded on EVERY page, every element it looks up must exist
+on every page OR be guarded: write
+    const el = document.querySelector('#thing');
+    if (!el) return;
+An unguarded lookup throws on the pages that lack the element and silently
+kills every handler after it. The same applies to hiding a shared element
+(unless you toggle it, do not set display:none on load — a page with no
+toggle will render a blank void). Use dates in the future for any event or
+deadline.
 
 IMPORTANT: never reference image files (img src, background url) — no local
 assets and no external URLs. Draw all visuals with inline SVG or CSS shapes
@@ -449,15 +478,20 @@ export function sanitizeDemoFiles(files: ProjectFile[]): ProjectFile[] {
 
 /**
  * Non-streaming generation with the same degenerate-output retry as the chat
- * route: one automatic retry when the model returns an unclosed fence or
- * empty output.
+ * route: automatic retries when the model returns an unclosed fence, empty
+ * output, or a file set the quality gates reject.
+ *
+ * Three attempts, not two. A failed generation does not ship a thin demo, it
+ * REMOVES the template from the gallery (nothing stale is served, the
+ * regenerate buttons are all a user has), so the extra attempt is cheap
+ * insurance against a good brief losing its demo to a strict gate.
  */
 async function generateTemplateFiles(
   template: TemplateDef,
   generation: Awaited<ReturnType<typeof resolveGenerationFor>>,
 ): Promise<ProjectFile[] | null> {
   const prompt = `${template.brief}${TEMPLATE_SUFFIX}`;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const result = streamText({
         model: generation.resolved.model,
@@ -471,12 +505,19 @@ async function generateTemplateFiles(
       const files = extractFiles(text);
       if (files && files.length > 0 && demoLooksComplete(files)) {
         const clean = sanitizeDemoFiles(files);
-        // Completeness asks "is there a body and a stylesheet"; the nav gate
-        // asks the question a first-page preview can never answer — does the
-        // navbar go anywhere. Both gate the cache; either failure retries.
-        if (demoNavIsWired(clean)) return clean;
+        // Three questions, none of them answerable from the gallery's
+        // first-page thumbnail: does it navigate, does it ship the pages the
+        // brief names, and does its own JS run against its own HTML.
+        if (!demoNavIsWired(clean)) {
+          console.log(
+            `[templates] ${template.id}: attempt ${attempt + 1} nav gate — ${formatDemoLinkAudit(auditDemoLinks(clean))}`,
+          );
+          continue;
+        }
+        const gates = runDemoGates(template.brief, clean);
+        if (gates.ok) return clean;
         console.log(
-          `[templates] ${template.id}: attempt ${attempt + 1} nav gate — ${formatDemoLinkAudit(auditDemoLinks(clean))}`,
+          `[templates] ${template.id}: attempt ${attempt + 1} quality gates — ${formatGateResult(gates)}`,
         );
         continue;
       }

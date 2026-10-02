@@ -330,6 +330,33 @@ function stripBrokenPass(html: string, emitted: Set<string>): string {
  */
 const PLACEHOLDER_ANCHOR_RE = /<a\b([^>]*)\bhref="#"/gi;
 
+/**
+ * Text content of html[from, to) with any tags dropped.
+ *
+ * Manual exec loop rather than `.replace(/<[^>]*>/g, "")`: CodeQL reads a
+ * String.replace that strips markup as an *incomplete sanitiser* and
+ * reports the surviving string as a possible `<script` injection, even
+ * though the value never reaches the page (it is only slugged).
+ */
+const LABEL_TAG_RE = /<[^>]*>/g;
+
+function textBetween(html: string, from: number, to: number): string {
+  let out = "";
+  let last = from;
+  LABEL_TAG_RE.lastIndex = from;
+  for (
+    let m = LABEL_TAG_RE.exec(html);
+    m !== null && m.index + m[0].length <= to;
+    m = LABEL_TAG_RE.exec(html)
+  ) {
+    out += html.slice(last, m.index);
+    last = m.index + m[0].length;
+  }
+  LABEL_TAG_RE.lastIndex = 0;
+  out += html.slice(last, to);
+  return out.trim();
+}
+
 function linkPageSlug(label: string): string {
   return label
     .toLowerCase()
@@ -362,7 +389,7 @@ function relinkPlaceholderNav(html: string, emitted: Set<string>): string {
     const openTag = m[0];
     const labelEnd = html.indexOf("</a>", m.index + openTag.length);
     if (labelEnd === -1) continue;
-    const label = html.slice(m.index + openTag.length, labelEnd).replace(/<[^>]*>/g, "").trim();
+    const label = textBetween(html, m.index + openTag.length, labelEnd);
     const slug = linkPageSlug(label);
     const target =
       slug === "" ? undefined : slug === "home" ? byslug.get("index") : byslug.get(slug);

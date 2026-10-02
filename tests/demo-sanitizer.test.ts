@@ -267,6 +267,18 @@ describe("sanitizeDemoFiles: placeholder nav relinking", () => {
     const out = sanitizeDemoFiles([pf("index.html", '<a href="#">Pricing</a>')]);
     expect(out[0].content).toContain('href="#"');
   });
+
+  // The label is read as text, so markup inside the anchor (a badge, an
+  // icon, an <em>) is not part of the label.
+  it("relinks a label that wraps the name in markup", () => {
+    const out = sanitizeDemoFiles([
+      pf("index.html", '<a href="#"><span class="lbl">Pricing</span></a>'),
+      pf("pricing.html", "<html><body>p</body></html>"),
+    ]);
+    expect(out[0].content).toContain('href="pricing.html"');
+    // the label markup itself survives
+    expect(out[0].content).toContain('<span class="lbl">Pricing</span>');
+  });
 });
 
 describe("sanitizeDemoFiles: JSON-escaped attribute quotes", () => {

@@ -247,23 +247,16 @@ function stripBrokenPass(html: string, emitted: Set<string>): string {
         // along on an emitted page (post.html#intro, post.html?id=2).
         const filePath = anchorHref.split("#")[0].split("?")[0].trim();
         if (filePath && emitted.has(filePath)) return tag;
-        // Dead anchor: neutralize by REBUILDING the tag around the href
-        // value with slice/concat — never a chained .replace(), which is
-        // the incomplete-sanitization pattern (CodeQL
-        // js/incomplete-multi-character-sanitization): a one-shot value
-        // swap could leave a second href-shaped construct inside another
-        // attribute's value untouched. Slicing replaces exactly one
-        // occurrence by construction.
-        const hrefAttr = /\bhref=/i.exec(tag);
-        if (!hrefAttr) return "";
-        const open = tag.indexOf('"', hrefAttr.index);
-        const openSingle = tag.indexOf("'", hrefAttr.index);
-        const quote =
-          open === -1 ? "'" : openSingle === -1 ? '"' : open < openSingle ? '"' : "'";
-        const valueStart = tag.indexOf(quote, hrefAttr.index);
-        const valueEnd = tag.indexOf(quote, valueStart + 1);
-        if (valueStart === -1 || valueEnd === -1) return "";
-        return tag.slice(0, valueStart) + '"#"' + tag.slice(valueEnd + 1);
+        // Dead anchor: neutralize with a fully SYNTHESIZED minimal open
+        // tag. Never return a rewritten copy of the matched text — a
+        // modified tag could still carry `<script` inside another
+        // attribute's value, and the fixed-point loop cannot remove what
+        // a rewrite deliberately keeps (CodeQL
+        // js/incomplete-multi-character-sanitization). The link's label
+        // text and closing </a> live outside this match and survive; the
+        // dead link loses its styling attributes, which is fine — it is
+        // dead.
+        return '<a href="#">';
       }
       const target = imgSrc ?? scriptSrc ?? linkHref;
       return keepAsset(target) ? tag : "";

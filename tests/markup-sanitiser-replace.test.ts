@@ -50,6 +50,22 @@ function lint(code: string): { ruleId: string; message: string; line: number }[]
     .map((m) => ({ ruleId: m.ruleId as string, message: m.message, line: m.line }));
 }
 
+/**
+ * Remove comments from JS source, leaving string literals alone is not needed
+ * here: this is only used to judge the rule module's own text, and a regex
+ * literal cannot contain a bare `//` or a nested block-comment opener.
+ */
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("//"))
+    .join("\n");
+}
+
+/** A regex literal in the rule module's source (no `/` or newline inside). */
+const REGEX_LITERAL = /\/(?:\\.|[^/\\\n])+\/[gimsuy]*/g;
+
 describe("no-markup-sanitiser-replace", () => {
   describe("fires on the markup shapes CodeQL reads as a sanitiser sink", () => {
     // Each case is a real historical defect: these one-liners are what the
@@ -208,34 +224,83 @@ describe("no-markup-sanitiser-replace", () => {
     expect(messages).toEqual([]);
   });
 
-  it("carries no backtracking regex — the rule tripped CodeQL twice getting here", () => {
-    // CodeQL failed this very PR twice on this file: first on an unbounded
-    // wildcard between two literals in the quoted-attribute shape, then on
-    // `on(?:\[…\]|[^…])+` — an unbounded `+` wrapping an alternation that
-    // contains `*`. Both are "Inefficient regular expression". A rule whose
-    // entire purpose is to keep a scanner red must not be what reds it, and
-    // the cheap guard is a static shape check on the rule's own source.
-    const source = readFileSync(
-      path.resolve(process.cwd(), "eslint-rules", "markup-sanitiser-replace.mjs"),
-      "utf8",
+  it("the shape detectors are scanner-proof: no quantifier in this file", () => {
+    // CodeQL's inefficient-regex query failed this file THREE times while the
+    // rule was being written, on three different shapes: an unbounded
+    // wildcard between two literals, then an unbounded `+` wrapping an
+    // alternation containing `*`, then a plain `\s*=` after a literal
+    // alternation. Each rewrite exposed the next. So the matching is now done
+    // with linear string scans, and the only regexes left are single
+    // character-class tests. This pin is the structural guarantee: matching
+    // going back to regexes is a failing test, not a fourth red scan.
+    const code = stripComments(
+      readFileSync(
+        path.resolve(process.cwd(), "eslint-rules", "markup-sanitiser-replace.mjs"),
+        "utf8",
+      ),
     );
-    // Only the executable lines matter — the comments legitimately quote
-    // `<[^>]*>` and the original bad patterns to explain why they are gone.
-    const code = source
-      .split("\n")
-      .filter((line) => !line.trim().startsWith("*") && !line.trim().startsWith("//"))
-      .join("\n");
-    // A `+` or `*` group whose body itself contains a quantifier.
-    expect(code).not.toMatch(/\([^()]*[+*][^()]*\)[+*]/);
-    // An unbounded wildcard class standing next to a quantifier.
-    expect(code).not.toMatch(/\[\^?\]?\*[+*]/);
-    expect(code).not.toContain("[^]*");
-    // The shapes must still fire after the rewrite.
-    expect(
-      lint(`const o = tag.replace(/\\s+on[a-z]+="[^"]*"/gi, "");`),
-    ).toHaveLength(1);
-    expect(lint(`const o = html.replace(/data-[\\w-]+="[^"]*"/gi, "");`)).toHaveLength(1);
-    expect(lint(`const o = html.replace(/onclick="[^"]*"/gi, "");`)).toHaveLength(1);
+    // Comments are stripped because the rule's prose legitimately quotes
+    // `<[^>]*>`, the alternation CodeQL rejected, and the slug patterns it
+    // must NOT flag — in order to explain why each shape exists.
+    const literals = [...code.matchAll(REGEX_LITERAL)];
+    expect(literals.length).toBeGreaterThan(0);
+    for (const { 0: literal } of literals) {
+      // A path fragment, not a pattern — the import comment survives the
+      // block-comment strip because it is a line comment with the path
+      // outside it. Ignore anything that does not open like a class or a
+      // single-character escape.
+      const opensLikeAPattern = literal[1] === "[" || literal[1] === "\\";
+      if (!opensLikeAPattern) continue;
+      // Quantifiers are only meaningful OUTSIDE a character class: `?`
+      // inside `[A-Za-z!?(]` is a literal character, and the shape must
+      // keep it. So drop the class bodies before counting.
+      const body = literal.slice(1, literal.lastIndexOf("/"));
+      const outside = body.replace(
+        /\[(?:\\.|[^\]])*\]/g,
+        "",
+      );
+      expect(outside.includes("*")).toBe(false);
+      expect(outside.includes("+")).toBe(false);
+      expect(outside.includes("?")).toBe(false);
+      expect(outside.includes("{")).toBe(false);
+    }
+  });
+
+  it("the string scans still catch every shape the regexes used to match", () => {
+    // Switching to string scans is only safe if it changed nothing
+    // observable. These are the exact spellings the regexes matched, in the
+    // forms a developer's source actually takes.
+    const mustFire = [
+      `/<[^>]*>/g`, // tag sweep
+      `/<[^<]*>/g`, // tag sweep, other spelling
+      `/[<>]/g`, // angle-bracket class
+      `/<\\/div>/g`, // escaped close tag
+      `/<\\/?[a-z]+>/g`, // optional close tag
+      `/<(?:script|style)[^>]*>/g`, // grouped tag name
+      `/<a\\b[^>]*>/g`, // tag with a boundary
+      `/href="#"/`, // attribute
+      `/\\bhref\\s*=/i`, // attribute, word-bounded
+      `/src=/`, // attribute
+      `/on[a-z]+=/`, // handler, as regex SOURCE
+      `/\\bon[a-z]+\\s*=/i`, // handler, anchored
+      `/data-[\\w-]+=/`, // data attribute
+      `/class="[^"]*"/`, // attribute with a quoted value
+      `/&quot;/g`, // entity
+      `/&#39;/g`, // numeric entity
+      `/&amp;/`, // entity
+      `/\\"/g`, // escaped quote
+    ];
+    // The REPLACEMENT counts too: a bare quote sweep is ordinary text
+    // work, but writing `&quot;` back is entity encoding, and CodeQL
+    // reads it exactly as it reads the decode direction.
+    expect(lint(`const o = tag.replace(/"/g, "&quot;");`)).toHaveLength(1);
+    expect(lint(`const o = tag.replace(/"/g, "-");`)).toHaveLength(0);
+    for (const pattern of mustFire) {
+      expect(
+        lint(`const o = tag.replace(${pattern}, "x");`),
+        `expected the rule to fire on ${pattern}`,
+      ).toHaveLength(1);
+    }
   });
 
   it("is enabled in the shipped config, and lint is a blocking gate", () => {

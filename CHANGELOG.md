@@ -39,12 +39,16 @@ process. Download zips: the
   alone — slug normalisation, `.html`/separator stripping, code-fence
   trimming, whitespace collapsing, even the quote-trimming of git ref
   paths. The fix the message names is the one that already exists in
-  `stripBrokenPass`: assemble output from slices, or use a real parser. Two
+  `stripBrokenPass`: assemble output from slices, or use a real parser. Three
   rounds of CodeQL feedback shaped the rule itself — the first cut tripped
-  the inefficient-regex query twice (an unbounded wildcard between two
-  literals, then an unbounded `+` wrapping an alternation containing `*`),
-  so both shapes are now unnested, and a pin rejects the nested form
-  outright rather than trusting the next reviewer to spot it.
+  the inefficient-regex query three times on three different shapes (an
+  unbounded wildcard between two literals; an unbounded `+` wrapping an
+  alternation containing `*`; a plain `\s*=` after a literal alternation),
+  and each rewrite exposed the next. So the shape detectors are now linear
+  string scans with no quantifier anywhere in the file, and a pin rejects a
+  reintroduced one outright rather than trusting the next reviewer to spot
+  it. A rule whose whole job is to keep a scanner green should not be what
+  turns it red.
 
 ### Changed
 

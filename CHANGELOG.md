@@ -90,6 +90,31 @@ process. Download zips: the
 
 ### Fixed
 
+- The Markdown reply parser no longer goes quadratic on the length of
+  the message. Two checks asked a question whose answer cost
+  O(remaining) and then asked it once per character, so both are now
+  linear; the builder re-parses the whole streaming buffer on every
+  token, so this was paid repeatedly on a growing string.
+
+  An unmatched `[` scanned to the end of the message looking for a
+  `]`, and every further `[` did the same again. The scan is
+  position-independent, so one failed scan now proves there is no
+  closer left and answers later questions in constant time.
+  `"[a".repeat(n)` went from 27ms at 3200 characters to 0.2ms.
+
+  The autolink check was worse: it took the whole remainder of the
+  message and lowercased all of it to test three scheme prefixes, at
+  every `(`-preceded position. `"[a(".repeat(n)` took 592ms at 76800
+  characters — over 100x its cost now. It reads one character to
+  reject ordinary prose (`h` or `m` can begin an allowed scheme), then
+  makes bounded checks.
+
+  One deliberate behaviour change falls out of the bound: the
+  authority of a bare URL is now examined for at most 253 characters
+  (the DNS name limit), so a "host" longer than any real one is no
+  longer autolinked. Link labels, hrefs and the `safeUrl` allowlist
+  are unchanged.
+
 - Template demos stopped shipping unstyled markup. The gallery's
   "emit exactly the files the brief describes" rule was read literally:
   no brief names a stylesheet, so the model dropped `styles.css` and four

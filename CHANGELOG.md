@@ -13,6 +13,32 @@ process. Download zips: the
 ## [Unreleased]
 
 ### Added
+- Assistant replies render as real Markdown. The chat panel used to
+  understand exactly one construct — `**bold**` — so every heading,
+  bullet list, code fence, link and block quote a model wrote printed as
+  literal `#`, `-` and backticks. Headings, paragraphs, hard line
+  breaks, fenced code (``` and ~~~), bullet and ordered lists, block
+  quotes, and the inline set (`code`, **bold**, *italic*, ~~strike~~,
+  links, autolinks) now render as elements.
+
+  The safety property is structural rather than filtered: the parser
+  emits a plain-data tree whose `Inline` type is a closed union of the
+  node kinds this module knows how to produce, and the renderer maps
+  that tree onto React elements. There is no HTML string anywhere on the
+  path and no `dangerouslySetInnerHTML`, so there is nothing for an
+  injection to escape into and no sanitizer allowlist to drift out of
+  date — a tag the model wrote stays a text node because no node kind
+  means "tag". Link hrefs are the one place a model string reaches a URL,
+  so `safeUrl` is the gate: http, https, mailto and site-relative paths
+  only, with `javascript:`/`data:`/`vbscript:`/protocol-relative rejected
+  however they are spelled or padded, and an unsafe URL degrading to
+  plain text rather than vanishing.
+
+  User messages stay verbatim — the user typed the asterisks.
+
+  The parser contains no `String.replace` at all, so it satisfies
+  `anybase/no-markup-sanitiser-replace` (the lint rule from #104) by
+  construction rather than by exemption.
 
 - Status board view on the dashboard — `/?view=board` swaps the grid for
   three status columns (idea / building / shipped), each with a live

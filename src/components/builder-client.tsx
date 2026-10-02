@@ -7,6 +7,7 @@ import type { BuilderUIMessage, FileUpdate } from "@/lib/types";
 import { choose, notify, ToastHost } from "./toast";
 import { useInlineMetaEdit } from "./inline-meta-edit";
 import { FilePanel } from "./asset-uploader";
+import { MarkdownMessage } from "./markdown-message";
 
 interface WorkspaceFile {
   path: string;
@@ -2724,24 +2725,7 @@ export function ContinueGenerationBanner({
   );
 }
 
-/**
- * Render `**bold**` as bold. The builder system prompt asks the model for a
- * one-line summary and both the model and the template-promotion seed use
- * `**…**` for names, so without this the chat panel printed raw asterisks.
- * Splitting on the marker and emitting <strong> keeps the text a text node
- * — no HTML injection surface, no dangerouslySetInnerHTML.
- */
-function renderInlineBold(text: string): React.ReactNode[] {
-  return text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
-    part.startsWith("**") && part.endsWith("**") && part.length > 4 ? (
-      <strong key={i} className="font-semibold text-neutral-100">
-        {part.slice(2, -2)}
-      </strong>
-    ) : (
-      part
-    ),
-  );
-}
+
 
 /** Exported for component tests (same seam as ContinueGenerationBanner). */
 export function MessageBubble({
@@ -2788,9 +2772,7 @@ export function MessageBubble({
         {message.parts
           .filter((p) => p.type === "text")
           .map((p, i) => (
-            <p key={i} className="whitespace-pre-wrap">
-              {renderInlineBold(p.text)}
-            </p>
+            <MarkdownMessage key={i} text={p.text} />
           ))}
         {message.parts.some((p) => p.type === "data-files") && (
           <div className="mt-2 rounded-md bg-emerald-950/50 px-2.5 py-1.5 text-xs text-emerald-400">

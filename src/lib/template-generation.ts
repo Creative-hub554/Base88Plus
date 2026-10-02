@@ -210,39 +210,64 @@ export async function generateTemplateDemoOrThrow(
 }
 
 /**
- * One deletion pass over the html: remove <img src=…>, <script src=…></script>,
- * and <link href=…> tags whose target is relative and not among the files the
- * model actually emitted. ONE alternation replace handles all three tag
- * shapes (a chained set of one-shot replaces would let an earlier deletion
- * splice the text into a NEW well-formed tag the later passes never see),
- * and replacements are always "" or the original match, so a pass never
- * grows the string.
+ * One deletion/neutralization pass over the html: remove <img src=…>,
+ * <script src=…></script>, and <link href=…> tags whose target is relative
+ * and not among the files the model actually emitted, and neutralize
+ * <a href=…> tags pointing at pages that were never emitted (rewritten to
+ * href="#" — the navbar keeps its items, nothing navigates to a 404).
+ *
+ * Anchors are judged STRICTER than assets on purpose: a root-relative
+ * asset (/vendored.js) may resolve same-origin, but a root-relative link
+ * (/pricing) would leave the demo entirely — a static multi-page site can
+ * only navigate among its own emitted files.
+ *
+ * ONE alternation replace handles all four tag shapes (a chained set of
+ * one-shot replaces would let an earlier deletion splice the text into a
+ * NEW well-formed tag the later passes never see), and replacements are
+ * always "", the original match, or a same-length-or-shorter rewrite, so a
+ * pass never grows the string.
  */
 const BROKEN_TAG_RE =
-  /[ \t]*(?:<img\b[^>]*\bsrc=["']([^"'#]+)["'][^>]*>|<script\b[^>]*\bsrc=["']([^"'#]+)["'][^>]*>\s*<\/script>|<link\b[^>]*\bhref=["']([^"'#]+)["'][^>]*>)[ \t]*\n?/gi;
+  /[ \t]*(?:<img\b[^>]*\bsrc=["']([^"'#]+)["'][^>]*>|<script\b[^>]*\bsrc=["']([^"'#]+)["'][^>]*>\s*<\/script>|<link\b[^>]*\bhref=["']([^"'#]+)["'][^>]*>|<a\b[^>]*\bhref=["']([^"'#]+)["'][^>]*>)[ \t]*\n?/gi;
 
 function stripBrokenPass(html: string, emitted: Set<string>): string {
-  const keep = (target: string): boolean =>
-    /^(https?:|data:|#|\/)/.test(target) || emitted.has(target);
+  // Assets: root-relative targets may resolve same-origin, so they keep.
+  const keepAsset = (target: string): boolean =>
+    /^(https?:|data:|mailto:|tel:|#|\/)/.test(target) || emitted.has(target);
+  // Anchors are stricter: no root-relative — a static demo cannot leave
+  // itself, so /pricing would 404 exactly like a missing file.
+  const keepAnchor = (target: string): boolean =>
+    /^(https?:|data:|mailto:|tel:|#)/.test(target);
   return html.replace(
     BROKEN_TAG_RE,
-    (tag, imgSrc: string, scriptSrc: string, linkHref: string) => {
+    (tag, imgSrc: string, scriptSrc: string, linkHref: string, anchorHref: string) => {
+      if (anchorHref !== undefined) {
+        if (keepAnchor(anchorHref)) return tag;
+        // Compare the path part only — fragments and query strings ride
+        // along on an emitted page (post.html#intro, post.html?id=2).
+        const filePath = anchorHref.split("#")[0].split("?")[0].trim();
+        if (filePath && emitted.has(filePath)) return tag;
+        // Dead anchor: neutralize instead of delete.
+        return tag.replace(/(\bhref=)["'][^"']*["']/i, '$1"#"');
+      }
       const target = imgSrc ?? scriptSrc ?? linkHref;
-      return keep(target) ? tag : "";
+      return keepAsset(target) ? tag : "";
     },
   );
 }
 
 /**
  * Remove tags that reference files the model never emitted — broken <img>,
- * dead <script src>/<link href>. Small models do this constantly; the demo
- * must look complete with only its own files. Deterministic, so it works
- * regardless of model quality. Returns the cleaned file set.
+ * dead <script src>/<link href> — and neutralize anchors pointing at pages
+ * that were never emitted (rewritten to href="#"). Small models do this
+ * constantly; the demo must look complete with only its own files.
+ * Deterministic, so it works regardless of model quality. Returns the
+ * cleaned file set.
  *
  * The pass is iterated TO A FIXED POINT: a removal can splice the surrounding
  * text into a NEW well-formed tag (e.g. `<im` + `<link …>` + `g src=…>`), and
  * a single chained pass would leave that new broken tag behind. Each pass
- * only deletes, so the loop strictly shrinks the string and terminates.
+ * only deletes or rewrites in place (never grows), so the loop terminates.
  */
 export function sanitizeDemoFiles(files: ProjectFile[]): ProjectFile[] {
   const emitted = new Set(files.map((f) => f.path));

@@ -79,6 +79,26 @@ process. Download zips: the
   runs on the cached demo files as they are copied into the new project, so
   every template generated before these fixes comes out repaired rather
   than needing a regeneration.
+- An audit that cannot fail is not an audit. The link check that shipped with
+  the template work asked "does every href resolve to an emitted file?" and
+  reported zero dead links on a SaaS demo whose entire navbar was `href="#"`
+  — "#" is a legal target, so a resolved link is not a working link. The new
+  `auditDemoLinks` adds the class that check could not see: an **inert**
+  link, a placeholder href whose label names a page the demo actually
+  emitted. Such a link is always wrong — the target is knowable — and it now
+  gates generation, so a demo with an unwired navbar is retried instead of
+  cached. The same page also resolves `#fragment` links against the ids a
+  page really has, which is how the landing demo's five dead footer links
+  (`#terms`, `#privacy`, …) became visible. `npm run audit:demos` reports
+  both totals over the cached demos; a dead link is reported but not fatal,
+  because failing a generation over an ordinary footer link would throw away
+  a good demo rather than improve it.
+- The cached demos are repaired at startup, not only on promote. A demo
+  generated before a repair rule existed kept its unrepaired bytes in the
+  library project forever, so the gallery iframe — which renders straight
+  from the cache — kept showing the broken original long after the promote
+  path had been fixed. The warm pass now re-runs the sanitiser over the
+  cache and writes back only what changed.
 
 ## [0.10.0] — 2026-10-01
 

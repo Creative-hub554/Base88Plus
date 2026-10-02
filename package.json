@@ -25,6 +25,7 @@
     "rotate": "node scripts/rotate.mjs",
     "verify:app": "node scripts/verify-generated-app.js",
     "verify:generated": "node scripts/verify-generated-app.js --all",
+    "audit:demos": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/demo-link-audit.mjs",
     "new:pin": "node scripts/new-generated-pin.mjs"
   },
   "dependencies": {

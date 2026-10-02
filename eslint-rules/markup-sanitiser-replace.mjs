@@ -42,44 +42,49 @@
  * Most shapes may be satisfied by the REPLACEMENT string too, because
  * `html.replace(/"/g, "&quot;")` is as much an entity sanitiser as
  * `html.replace(/&quot;/g, '"')` and CodeQL reads both identically.
+ * `onPatternOnly: true` restricts one to the search pattern.
  */
 const MARKUP_SHAPES = [
   {
     what: "an HTML tag (`<a`, `</script`, `<(?:script|style)`)",
     // Tolerates the regex source's own escaping: `<\/div>`, `<\/?[a-z]+>`.
-    re: /<\\?\s*\/?\s*[a-zA-Z!?(]/,
+    test: (t) => /<\\?\s*\/?\s*[a-zA-Z!?(]/.test(t),
   },
   {
     // The generic `<…>` sweep: `<[^>]*>`, `<[^<]*>`, `[<>]`, `<(a|b)>`.
     what: "a generic tag match (`<[^>]*>`)",
-    re: /<[^<]*>/,
+    test: (t) => /<[^<]*>/.test(t),
   },
   {
+    what: "an HTML attribute (`href=`, `src=`, `onclick=`, `data-*=`)",
     // `on…=` needs its own alternation branch: as a regex SOURCE the handler
     // name is usually written `\s+on[a-z]+=`, where the literal `on[a-z]+`
     // contains no attribute name at all.
-    what: "an HTML attribute (`href=`, `src=`, `onclick=`, `data-*=`)",
-    re:
-      /\b(?:href|src|action|class|style|target|rel|data-[\w-]+|on(?:\[[^\]]*\]|[^\s"'=`])+)\s*=/i,
+    test: (t) =>
+      /\b(?:href|src|action|class|style|target|rel|data-[\w-]+|on(?:\[[^\]]*\]|[^\s"'=`])+)\s*=/i.test(
+        t,
+      ),
   },
   {
     // Attribute-by-construction: a quote AND an `=` in one pattern, with no
-    // attribute name to go on (`\s+on[a-z]+="[^"]*"`). Judged on the pattern
-    // only: the replacement of a legitimate quote-trimming replace is a
-    // delimiter or empty, never markup.
+    // attribute name to go on (`\s+on[a-z]+="[^"]*"`). Two independent tests
+    // rather than the single regex that spans them: an unbounded wildcard
+    // between the two is exactly the shape CodeQL's inefficient-regex query
+    // flags, and a lint rule that trips its own scanner is a poor advert for
+    // the idea. Pattern only: the replacement of a legitimate quote-trimming
+    // replace is a delimiter or empty, and pairing a quote with an `=` across
+    // the two arguments would flag plain text substitutions.
     what: "a quoted attribute value (`…=\"…\"`)",
-    re: /["'`][^]*=/,
-    // Pattern only: a slug replace's REPLACEMENT is a delimiter, and pairing
-    // `a` + `=` across the two arguments would flag plain text substitutions.
+    test: (t) => /["'`]/.test(t) && t.includes("="),
     onPatternOnly: true,
   },
   {
     what: "an escaped quote inside markup (`\\\"`)",
-    re: /\\["'`]/,
+    test: (t) => /\\["'`]/.test(t),
   },
   {
     what: "an HTML entity (`&quot;`, `&#39;`, `&amp;`)",
-    re: /&(?:quot|amp|lt|gt|nbsp|#\d+|#x[0-9a-f]+);/i,
+    test: (t) => /&(?:quot|amp|lt|gt|nbsp|#\d+|#x[0-9a-f]+);/i.test(t),
   },
 ];
 
@@ -135,7 +140,7 @@ export default {
             : "",
         ].join(" ");
         const shape = MARKUP_SHAPES.find((s) =>
-          s.onPatternOnly ? s.re.test(patternText) : s.re.test(both),
+          s.test(s.onPatternOnly ? patternText : both),
         );
         if (!shape) return;
         context.report({

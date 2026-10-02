@@ -208,6 +208,28 @@ describe("no-markup-sanitiser-replace", () => {
     expect(messages).toEqual([]);
   });
 
+  it("carries no unbounded wildcard between two literals (its own CodeQL trip)", () => {
+    // The first cut of the quoted-attribute shape was `/["'`][^]*=/`, and
+    // CodeQL failed THIS PR on it: "Inefficient regular expression — may
+    // cause exponential backtracking on strings containing many repetitions
+    // of '\\[\\]'". A rule whose whole point is to keep a scanner red ought
+    // not to be the thing that reds it, so the shape is two independent
+    // tests now and this pin refuses the regex form coming back.
+    const source = readFileSync(
+      path.resolve(process.cwd(), "eslint-rules", "markup-sanitiser-replace.mjs"),
+      "utf8",
+    );
+    // The flagged construct verbatim: an unbounded `[^]` (or `[\s\S]`)
+    // standing between two literals. Anything looser would trip on the
+    // `[^>]*` examples the rule's own comments legitimately quote.
+    expect(source).not.toContain("[^]*");
+    expect(source).not.toMatch(/\[\^\][^/]*?\s*[+*]/);
+    // And the shape still fires, from the pattern alone.
+    expect(
+      lint(`const o = tag.replace(/\\s+on[a-z]+="[^"]*"/gi, "");`),
+    ).toHaveLength(1);
+  });
+
   it("is enabled in the shipped config, and lint is a blocking gate", () => {
     // The CI-enforceability claim, pinned: the rule must be wired into the
     // config that `npm run lint` runs, and `npm run lint` must run in the

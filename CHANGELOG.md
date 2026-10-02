@@ -39,7 +39,10 @@ process. Download zips: the
   alone — slug normalisation, `.html`/separator stripping, code-fence
   trimming, whitespace collapsing, even the quote-trimming of git ref
   paths. The fix the message names is the one that already exists in
-  `stripBrokenPass`: assemble output from slices, or use a real parser.
+  `stripBrokenPass`: assemble output from slices, or use a real parser. The
+  first cut of the rule tripped CodeQL's own inefficient-regex query on an
+  unbounded wildcard in one of its shape patterns, which is now two
+  independent tests — and pinned, so the regex form cannot come back.
 
 ### Changed
 

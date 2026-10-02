@@ -16,6 +16,13 @@ import {
   templateProjectId,
   type TemplateDef,
 } from "@/lib/templates";
+import {
+  auditDemoLinks,
+  demoNavIsWired,
+  formatDemoLinkAudit,
+  pageForLabel,
+  textBetween,
+} from "@/lib/demo-link-audit";
 import type { ProjectFile } from "@/lib/types";
 
 /**
@@ -327,57 +334,16 @@ function stripBrokenPass(html: string, emitted: Set<string>): string {
  * against the emitted pages: "Pricing" -> pricing.html, "Home" ->
  * index.html. Matching is exact on a slug, so a legitimate in-page anchor
  * ("skip to content", "top") never matches anything and is left alone.
+ *
+ * The label-to-page decision itself lives in `pageForLabel`
+ * (lib/demo-link-audit), shared with the link audit: a placeholder that
+ * names a real page is either relinked here or reported inert there, never
+ * both missed.
  */
 const PLACEHOLDER_ANCHOR_RE = /<a\b([^>]*)\bhref="#"/gi;
 
-/**
- * Text content of html[from, to) with any tags dropped.
- *
- * Manual exec loop rather than `.replace(/<[^>]*>/g, "")`: CodeQL reads a
- * String.replace that strips markup as an *incomplete sanitiser* and
- * reports the surviving string as a possible `<script` injection, even
- * though the value never reaches the page (it is only slugged).
- */
-const LABEL_TAG_RE = /<[^>]*>/g;
-
-function textBetween(html: string, from: number, to: number): string {
-  let out = "";
-  let last = from;
-  LABEL_TAG_RE.lastIndex = from;
-  for (
-    let m = LABEL_TAG_RE.exec(html);
-    m !== null && m.index + m[0].length <= to;
-    m = LABEL_TAG_RE.exec(html)
-  ) {
-    out += html.slice(last, m.index);
-    last = m.index + m[0].length;
-  }
-  LABEL_TAG_RE.lastIndex = 0;
-  out += html.slice(last, to);
-  return out.trim();
-}
-
-function linkPageSlug(label: string): string {
-  return label
-    .toLowerCase()
-    .replace(/&/g, " and ")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim()
-    .replace(/\s+/g, "-");
-}
-
 function relinkPlaceholderNav(html: string, emitted: Set<string>): string {
-  const pages = [...emitted].filter((p) => p.endsWith(".html"));
-  // A label maps to a page only when the slug is unambiguous: two pages
-  // slugging to the same word (about.html, about-me.html) means guessing.
-  const byslug = new Map<string, string>();
-  const ambiguous = new Set<string>();
-  for (const page of pages) {
-    const stem = linkPageSlug(page.replace(/\.html$/, ""));
-    if (byslug.has(stem)) ambiguous.add(stem);
-    byslug.set(stem, page);
-  }
-
+  const pages = [...emitted].filter((p) => p.toLowerCase().endsWith(".html"));
   let out = "";
   let last = 0;
   PLACEHOLDER_ANCHOR_RE.lastIndex = 0;
@@ -390,10 +356,10 @@ function relinkPlaceholderNav(html: string, emitted: Set<string>): string {
     const labelEnd = html.indexOf("</a>", m.index + openTag.length);
     if (labelEnd === -1) continue;
     const label = textBetween(html, m.index + openTag.length, labelEnd);
-    const slug = linkPageSlug(label);
-    const target =
-      slug === "" ? undefined : slug === "home" ? byslug.get("index") : byslug.get(slug);
-    if (target === undefined || ambiguous.has(slug)) continue;
+    // The SAME matcher the audit re-derives, so a placeholder that names an
+    // emitted page can never survive here and then be reported as inert.
+    const target = pageForLabel(label, pages);
+    if (!target || target.ambiguous) continue;
 
     // Slice the href out by hand (a String.replace on the tag reads as a
     // sanitising sink to CodeQL) and keep the anchor's other attributes.
@@ -402,7 +368,7 @@ function relinkPlaceholderNav(html: string, emitted: Set<string>): string {
     out += html.slice(last, m.index);
     out +=
       openTag.slice(0, hrefAt) +
-      `href="${target}"` +
+      `href="${target.page}"` +
       openTag.slice(hrefAt + 'href="#"'.length);
     last = m.index + openTag.length;
   }
@@ -504,7 +470,15 @@ async function generateTemplateFiles(
       }
       const files = extractFiles(text);
       if (files && files.length > 0 && demoLooksComplete(files)) {
-        return sanitizeDemoFiles(files);
+        const clean = sanitizeDemoFiles(files);
+        // Completeness asks "is there a body and a stylesheet"; the nav gate
+        // asks the question a first-page preview can never answer — does the
+        // navbar go anywhere. Both gate the cache; either failure retries.
+        if (demoNavIsWired(clean)) return clean;
+        console.log(
+          `[templates] ${template.id}: attempt ${attempt + 1} nav gate — ${formatDemoLinkAudit(auditDemoLinks(clean))}`,
+        );
+        continue;
       }
       console.log(
         `[templates] ${template.id}: degenerate attempt ${attempt + 1}`,
@@ -563,6 +537,11 @@ export async function warmTemplateCache(): Promise<void> {
   if (warmStarted) return;
   warmStarted = true;
 
+  // Before anything else: make the cache say what a user actually gets.
+  // Repairs are idempotent, so this only writes demos a newer sanitizer
+  // would change — see repairCachedDemos.
+  repairCachedDemos();
+
   if (!(await isProviderConfigured())) {
     console.log(
       "[templates] warmup skipped — no AI provider configured (gallery has manual buttons)",
@@ -577,6 +556,42 @@ export async function warmTemplateCache(): Promise<void> {
   }
 
   await runPass(due, "warming cache in background");
+}
+
+/**
+ * Re-run the sanitizer over every CACHED demo and write back what changed.
+ *
+ * A demo generated before a repair rule existed keeps its unrepaired bytes
+ * in the library project forever: the promote route sanitizes on copy, so
+ * users get a fixed site, but the cache (and the gallery iframe, which
+ * renders straight from it) keeps showing the broken original. That is how
+ * the SaaS navbar stayed inert in the gallery for a release after the fix
+ * shipped. Repairing at BOTH boundaries — cache and promote — makes the
+ * cached demo equal the promoted one, so `npm run audit:demos` measures
+ * something real.
+ *
+ * Idempotent by construction: sanitizeDemoFiles on already-sanitized bytes
+ * is a no-op, so this writes nothing on a healthy cache. Returns the number
+ * of demos changed.
+ */
+export function repairCachedDemos(): number {
+  let repaired = 0;
+  for (const template of TEMPLATES) {
+    const projectId = templateProjectId(template.id);
+    if (!getProject(projectId)) continue;
+    const files = listAppFiles(projectId);
+    if (files.length === 0) continue;
+    const clean = sanitizeDemoFiles(files);
+    for (let i = 0; i < clean.length; i++) {
+      if (clean[i].content === files[i].content) continue;
+      saveAppFile(projectId, clean[i].path, clean[i].content);
+      repaired++;
+    }
+    if (clean.some((c, i) => c.content !== files[i].content)) {
+      console.log(`[templates] ${template.id}: repaired cached demo files`);
+    }
+  }
+  return repaired;
 }
 
 /**

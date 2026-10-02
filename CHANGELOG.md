@@ -24,6 +24,15 @@ process. Download zips: the
   moved into one shared `ProjectCard` with `grid` and `board` layouts —
   the grid renders identically.
 
+### Fixed
+
+- Clearing a project status actually works: the card select's "No
+  status" option used to save the empty string to the meta route, which
+  the store rejected as an enum violation — a status could be set but
+  never unset. The empty string now clears the status (the same
+  contract as the tags field), and only non-empty unknown values are
+  rejected with the 400 value list.
+
 ## [0.10.0] — 2026-10-01
 
 Fifteenth release: project status — the fourth inline metadata surface,

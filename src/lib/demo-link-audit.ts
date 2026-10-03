@@ -1,3 +1,129 @@
+// ---------------------------------------------------------------------------
+// Tag scanning — linear, and shared so three callers cannot disagree
+// ---------------------------------------------------------------------------
+
+/** A tag found by `forEachTag`: `[start, end)` of the original string. */
+export type TagSpan = {
+  /** Index of the `<`. */
+  start: number;
+  /** Index just past the `>`. */
+  end: number;
+};
+
+/** ASCII letter, either case. */
+function isAsciiLetter(code: number): boolean {
+  return (code >= 97 && code <= 122) || (code >= 65 && code <= 90);
+}
+
+/**
+ * Visit every `<name ...>` tag — a `<` followed by an ASCII letter, running to
+ * the first `>` after it. Exactly what `/<[a-zA-Z][^>]*>/g` matched.
+ *
+ * WHY NOT THE REGEX ANYMORE: that shape is quadratic on any document with an
+ * unterminated tag. `[^>]*` cannot cross a `>`, so a `<` with no `>` after it
+ * makes the engine consume the rest of the file looking for one, fail, advance
+ * a character, and try again at the next `<` — a full pass over the remainder
+ * for every unmatched `<`. Measured at 4x per doubling of the input, in four
+ * separate scanners: this module's tag walk and `textBetween`, the demo gates'
+ * `visibleText`, and the sanitiser's `unescapeAttrQuotes` (which sits inside a
+ * fixed-point loop and so pays it more than once).
+ *
+ * A cleverer regex does not help. Possessive quantifiers do not apply, because
+ * the cost is the engine retrying at the next `<`, not backtracking inside one
+ * attempt. The fix is the loop structure, and it rests on one observation: if
+ * there is no `>` after a position then there is none after any later position
+ * either, so no tag can begin anywhere ahead of us. So "no `>` ahead" ends the
+ * scan instead of failing one attempt.
+ *
+ * Behaviour is deliberately unchanged, awkward cases included. A tag still runs
+ * to the FIRST `>` after its `<`, so a `>` inside a quoted attribute truncates
+ * it here exactly as it did before, which callers already lived with. A `<` not
+ * followed by a letter is still skipped one character at a time, so a real tag
+ * later in the string can still match.
+ */
+export function forEachTag(
+  html: string,
+  visit: (tag: TagSpan) => void,
+  from = 0,
+  limit = Number.POSITIVE_INFINITY,
+): void {
+  let pos = from;
+  while (pos < html.length && pos < limit) {
+    const lt = html.indexOf("<", pos);
+    if (lt === -1 || lt >= limit) return;
+    // The regex required a letter after `<`. Without one it is not a tag, and
+    // the engine moved on by a single character — so do the same, rather than
+    // jumping to the next `<`, which would step over a real tag in between.
+    if (!isAsciiLetter(html.charCodeAt(lt + 1))) {
+      pos = lt + 1;
+      continue;
+    }
+    const gt = html.indexOf(">", lt + 1);
+    if (gt === -1) return;
+    visit({ start: lt, end: gt + 1 });
+    pos = gt + 1;
+  }
+}
+
+/**
+ * Visit every `<...>` run, including a `<` not followed by a letter — the
+ * behaviour of `/<[^>]*>/g`. Used where the point is to find tag-shaped
+ * delimiters in text being stripped, so `3 < 5 and 6 > 2` still has its
+ * bracket removed exactly as it did before. Linear for the same reason as
+ * `forEachTag`, minus the letter check.
+ *
+ * `limit` bounds the search to html[from, limit). It matters: without it a
+ * caller scanning a small window inside a large document pays for the whole
+ * remainder of that document, which is quadratic once the window is asked for
+ * once per link. `textBetween` is the caller that needs it.
+ */
+export function forEachTagRun(
+  html: string,
+  visit: (tag: TagSpan) => void,
+  from = 0,
+  limit = Number.POSITIVE_INFINITY,
+): void {
+  let pos = from;
+  while (pos < html.length && pos < limit) {
+    const lt = html.indexOf("<", pos);
+    // No `<` before the limit: nothing left in the window.
+    if (lt === -1 || lt >= limit) return;
+    const gt = html.indexOf(">", lt + 1);
+    if (gt === -1) return;
+    visit({ start: lt, end: gt + 1 });
+    pos = gt + 1;
+  }
+}
+
+/** The tag text for a span, for callers that need it as a string. */
+export function tagText(html: string, tag: TagSpan): string {
+  return html.slice(tag.start, tag.end);
+}
+
+/**
+ * Index of the next `</a>` in any case at or after `from`, or -1.
+ * Exported because the sanitiser's relinker needs the same search.
+ *
+ * This was `html.toLowerCase().indexOf("</a>", tagEnd)`, which lowercased the
+ * WHOLE document once per anchor — so a page with L links cost O(L x page), and
+ * the measured curve was 4x per doubling.
+ *
+ * Comparing character codes instead of lowercasing also removes a latent index
+ * bug: `toLowerCase` can change a string's LENGTH (U+0130 lowercases to two
+ * code points), which would shift every index after it and make the label read
+ * from the wrong offset. Matching single ASCII characters cannot shift that.
+ */
+export function indexOfCloseAnchor(html: string, from: number): number {
+  for (let i = from; i + 4 <= html.length; i += 1) {
+    if (html.charCodeAt(i) !== 60) continue; // <
+    if (html.charCodeAt(i + 1) !== 47) continue; // /
+    const letter = html.charCodeAt(i + 2);
+    if (letter !== 97 && letter !== 65) continue; // a or A
+    if (html.charCodeAt(i + 3) !== 62) continue; // >
+    return i;
+  }
+  return -1;
+}
 /**
  * Link resolution for template demo file sets.
  *
@@ -85,19 +211,50 @@ export type LabelTarget =
  * least reads as unfinished.
  */
 export function pageForLabel(label: string, pages: string[]): LabelTarget | null {
-  const slug = linkPageSlug(label);
-  if (slug === "") return null;
-  const key = slug === "home" ? "index" : slug;
-  let found: string | null = null;
+  return pageForLabelIn(buildPageSlugIndex(pages), label);
+}
+
+/**
+ * Slug of each emitted page -> the pages that slug to it.
+ *
+ * The label-to-page lookup is asked once per nav link over the whole page list,
+ * so answering it by scanning and re-slugging every page each time is
+ * O(links x pages) and re-slugifies the same filenames hundreds of times.
+ * Measured at 113ms for 800 links against 800 pages, growing 4x per doubling.
+ * Both hot callers (`auditDemoLinks`, `relinkPlaceholderNav`) build this once
+ * and answer in constant time.
+ *
+ * A bucket holds every colliding page rather than a single winner, because the
+ * ambiguity guard needs to know a second one exists.
+ */
+export type PageSlugIndex = Map<string, string[]>;
+
+/** Build the index `pageForLabelIn` answers from. */
+export function buildPageSlugIndex(pages: string[]): PageSlugIndex {
+  const index: PageSlugIndex = new Map();
   for (const page of pages) {
     // Slug the STEM, don't compare it raw: about_us.html must collide with
     // about-us.html, which is the whole point of the ambiguity guard.
-    if (linkPageSlug(pageStem(page)) === key) {
-      if (found !== null) return { page: null, ambiguous: true };
-      found = page;
-    }
+    const slug = linkPageSlug(pageStem(page));
+    const bucket = index.get(slug);
+    if (bucket === undefined) index.set(slug, [page]);
+    else bucket.push(page);
   }
-  return found === null ? null : { page: found, ambiguous: false };
+  return index;
+}
+
+/** `pageForLabel` against a prebuilt index — same answer, no per-label scan. */
+export function pageForLabelIn(
+  index: PageSlugIndex,
+  label: string,
+): LabelTarget | null {
+  const slug = linkPageSlug(label);
+  if (slug === "") return null;
+  const key = slug === "home" ? "index" : slug;
+  const bucket = index.get(key);
+  if (bucket === undefined) return null;
+  if (bucket.length > 1) return { page: null, ambiguous: true };
+  return { page: bucket[0], ambiguous: false };
 }
 
 function pageStem(page: string): string {
@@ -114,28 +271,37 @@ function pageStem(page: string): string {
  * the surviving string as a possible `<script` injection, even though the
  * value never reaches the page (it is only slugged).
  */
-const LABEL_TAG_RE = /<[^>]*>/g;
-
 export function textBetween(html: string, from: number, to: number): string {
   let out = "";
   let last = from;
-  LABEL_TAG_RE.lastIndex = from;
-  for (
-    let m = LABEL_TAG_RE.exec(html);
-    m !== null && m.index + m[0].length <= to;
-    m = LABEL_TAG_RE.exec(html)
-  ) {
-    out += html.slice(last, m.index);
-    last = m.index + m[0].length;
-  }
-  LABEL_TAG_RE.lastIndex = 0;
+  forEachTagRun(
+    html,
+    (tag) => {
+      // A tag that ends past `to` is not ours: the old loop stopped there and
+      // left `last` alone, and so does this.
+      if (tag.end > to) return;
+      out += html.slice(last, tag.start);
+      last = tag.end;
+    },
+    from,
+    to,
+  );
   out += html.slice(last, to);
   return out.trim();
 }
 
+/**
+ * Text content of html[from, to) with any tags dropped.
+ *
+ * The walk is `forEachTagRun`, not the `/<[^>]*>/g` this used to be. That
+ * pattern is quadratic on an unterminated tag — every `<` makes the engine
+ * scan the rest of the file for a `>` that never comes, then retry at the next
+ * `<` — and a truncated model response ends mid-tag often enough to matter.
+ * See lib/html-tags.ts for why the loop structure is the fix.
+ */
 /** The label of the `<a>` whose open tag ends at `tagEnd`, or "" if unterminated. */
 export function anchorLabelAt(html: string, tagEnd: number): string {
-  const closeAt = html.toLowerCase().indexOf("</a>", tagEnd);
+  const closeAt = indexOfCloseAnchor(html, tagEnd);
   if (closeAt === -1) return "";
   return textBetween(html, tagEnd, closeAt);
 }
@@ -164,7 +330,6 @@ export function resolveDemoPath(fromFile: string, rawPath: string): string {
   return out.length === 0 ? "index.html" : out.join("/");
 }
 
-const AUDIT_TAG_RE = /<[a-zA-Z][^>]*>/g;
 const AUDIT_ATTR_RE =
   /\b(href|src)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`]+))/gi;
 const AUDIT_ID_RE = /\bid\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`]+))/gi;
@@ -214,6 +379,9 @@ export function auditDemoLinks(files: DemoAuditFile[]): DemoLinkAudit {
   const pages = files
     .map((f) => f.path)
     .filter((p) => p.toLowerCase().endsWith(".html"));
+  // One index for every link on every page: the label lookup used to re-scan
+  // and re-slug this list once per placeholder link.
+  const pageIndex = buildPageSlugIndex(pages);
   const problems: DemoLinkProblem[] = [];
   let checked = 0;
   let placeholders = 0;
@@ -222,15 +390,10 @@ export function auditDemoLinks(files: DemoAuditFile[]): DemoLinkAudit {
     if (!file.path.toLowerCase().endsWith(".html")) continue;
     const html = file.content;
     const ids = collectIds(html);
-    AUDIT_TAG_RE.lastIndex = 0;
-    for (
-      let t = AUDIT_TAG_RE.exec(html);
-      t !== null;
-      t = AUDIT_TAG_RE.exec(html)
-    ) {
-      const tag = t[0];
+    forEachTag(html, (span) => {
+      const tag = html.slice(span.start, span.end);
       const label =
-        tagNameOf(tag) === "a" ? anchorLabelAt(html, t.index + tag.length) : undefined;
+        tagNameOf(tag) === "a" ? anchorLabelAt(html, span.end) : undefined;
       AUDIT_ATTR_RE.lastIndex = 0;
       for (
         let a = AUDIT_ATTR_RE.exec(tag);
@@ -258,7 +421,7 @@ export function auditDemoLinks(files: DemoAuditFile[]): DemoLinkAudit {
             continue;
           }
           if (label !== undefined) {
-            const named = pageForLabel(label, pages);
+            const named = pageForLabelIn(pageIndex, label);
             if (named && !named.ambiguous) {
               problems.push({
                 file: file.path,
@@ -278,7 +441,7 @@ export function auditDemoLinks(files: DemoAuditFile[]): DemoLinkAudit {
           problems.push({ file: file.path, reason: "dead", target, label });
         }
       }
-    }
+    });
   }
 
   const dead = problems.filter((p) => p.reason === "dead");

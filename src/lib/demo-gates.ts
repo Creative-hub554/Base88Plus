@@ -30,6 +30,7 @@
  * Dependency-free like lib/demo-link-audit.ts, so the app, vitest and the
  * scripts/ CLI can all import the same rules.
  */
+import { forEachTagRun } from "./demo-link-audit";
 
 export interface GateFile {
   path: string;
@@ -98,7 +99,6 @@ const FILLER_RE = new RegExp(`\\b(${FILLER_WORDS.join("|")})\\s*\\d+\\b`, "gi");
 const FILLER_OTHER_RE = /\b(your\s+text\s+here|lorem ipsum|TODO|placeholder\s+text)\b/gi;
 
 const SCRIPT_STYLE_RE = /<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
-const TAG_RE = /<[^>]*>/g;
 
 /** Visible text of an html file: no tags, no script/style bodies. */
 export function visibleText(html: string): string {
@@ -119,13 +119,16 @@ export function visibleText(html: string): string {
   // nothing in between fuses the two words into "FeaturesFeature", which no
   // word-boundary regex can see — the filler scan then finds nothing in a
   // document made entirely of filler.
+  // `forEachTagRun`, not the `/<[^>]*>/g` this replaces. That pattern is
+  // quadratic on an unterminated tag — measured at 4x per doubling here — and
+  // the fix is to end the scan at the first `<` with no `>` ahead instead of
+  // retrying at the next one. See `forEachTag` in lib/demo-link-audit.
   let text = "";
-  TAG_RE.lastIndex = 0;
   let last = 0;
-  for (let m = TAG_RE.exec(stripped); m !== null; m = TAG_RE.exec(stripped)) {
-    text += stripped.slice(last, m.index) + " ";
-    last = m.index + m[0].length;
-  }
+  forEachTagRun(stripped, (tag) => {
+    text += stripped.slice(last, tag.start) + " ";
+    last = tag.end;
+  });
   text += stripped.slice(last);
   return text.split(/\s+/).filter(Boolean).join(" ");
 }

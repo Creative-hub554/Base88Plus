@@ -24,7 +24,11 @@
 //                    in-progress run counts. MISSED = the silent-skip signal,
 //                    but only after SCHEDULE_GRACE_MS has elapsed since the
 //                    due instant - GitHub starts scheduled runs late, so a
-//                    slot that is merely late is a note, not a finding.
+//                    slot that is merely late is a note, not a finding. The
+//                    note then says WHY it is still empty: a schedule that
+//                    has fired before is quoted its own measured lag, a
+//                    schedule with no run ever recorded is called out as the
+//                    60-day signature, so patience is never silent.
 //
 // This script audits ITSELF too: heartbeat.yml's own cron is in the audited
 // set, so a dead heartbeat is caught by the drill/CI surface instead of
@@ -71,6 +75,39 @@ export const SCHEDULE_GRACE_MS = 12 * 60 * 60 * 1000;
 // the boundary is unit-testable without touching the Actions API.
 export function overdueState(lastDueMs, nowMs) {
   return nowMs - lastDueMs >= SCHEDULE_GRACE_MS ? 'dead' : 'grace';
+}
+
+// Why this exists: a grace makes silence indistinguishable from death unless
+// the note explains the silence. The discriminator is the schedule's OWN
+// history, which costs nothing - it is already in the run list we fetched.
+//   never-fired - no scheduled run has EVER been recorded for this workflow.
+//                  An empty run list is what the 60-day inactivity
+//                  auto-disable looks like from the run side, so patience
+//                  here is the riskiest kind.
+//   has-history - earlier slots did fire. Their lag is the yardstick: if the
+//                  previous slot also started hours late, one missed slot is
+//                  the queue behaving as observed, not a schedule dying.
+// Returns the measured lag of the most recent PRIOR slot against the instant
+// that slot was due, so the note can quote this repo's real lag rather than
+// an assumption. scheduledRuns must be newest-first, as the API returns it.
+export function classifyMiss(scheduledRuns, lastDueMs, prevDueMs) {
+  if (!scheduledRuns || scheduledRuns.length === 0) {
+    return { kind: 'never-fired', priorLagMs: null };
+  }
+  const newest = scheduledRuns[0];
+  const started = Date.parse(newest.run_started_at || newest.created_at);
+  const prior = started < lastDueMs && prevDueMs ? started - prevDueMs : null;
+  return { kind: 'has-history', priorLagMs: Number.isNaN(started) ? null : prior };
+}
+
+// Human-readable lag for the note. Minutes are the useful unit here: this
+// repo's schedule lag is hours, and '8h26m' says what '30200000ms' hides.
+export function formatLag(ms) {
+  if (ms === null || ms === undefined || Number.isNaN(ms)) return 'an unmeasured amount';
+  const mins = Math.round(ms / 60000);
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return h ? `${h}h${String(m).padStart(2, '0')}m` : `${m}m`;
 }
 
 // ---------------------------------------------------------------- cron math
@@ -284,7 +321,11 @@ async function main() {
         // passes produces a false positive on a live schedule. Re-audited on
         // the next heartbeat, which is what catches a genuinely stalled one.
         const deadline = new Date(lastDue + SCHEDULE_GRACE_MS).toISOString().replace('T', ' ').slice(0, 16) + 'Z';
-        notes.push(`\`${label}\` cron \`${expr}\` was due ${dueIso} and no scheduled run has started at/after that instant yet, but it is inside the ${SCHEDULE_GRACE_MS / 3600000}h queue grace - re-audit after ${deadline} before treating it as dead.`);
+        const miss = classifyMiss(runs.workflow_runs, lastDue, prevFireBefore(c, lastDue - 1));
+        const why = miss.kind === 'never-fired'
+          ? `this workflow has NEVER produced a scheduled run, which is exactly how the 60-day inactivity auto-disable looks from the run side - so if the list is still empty at ${deadline}, read it as a dead schedule rather than a queued one`
+          : `its schedule has fired before (the previous slot started ${formatLag(miss.priorLagMs)} late, in line with this repo's measured queue lag), so one missed slot reads as the queue rather than as death`;
+        notes.push(`\`${label}\` cron \`${expr}\` was due ${dueIso} and no scheduled run has started at/after that instant yet, but it is inside the ${SCHEDULE_GRACE_MS / 3600000}h queue grace - ${why}. Re-audit after ${deadline}.`);
       } else {
         const last = latestScheduled
           ? `latest scheduled attempt: run ${latestScheduled.id} (${latestScheduled.status}/${latestScheduled.conclusion}, started ${latestScheduled.run_started_at || latestScheduled.created_at})`
@@ -309,7 +350,7 @@ async function main() {
 
   const body = `Weekly schedule heartbeat (${stamp}): **${findings.length} finding(s)** - a schedule looks dead or disabled.` +
     `\n\n${findings.map((f) => `- ${f}`).join('\n')}` +
-    (notes.length ? `\n\n<details><summary>Healthy / not-yet-due schedules (${notes.length})</summary>\n\n${notes.map((n) => `- ${n}`).join('\n')}\n\n</details>` : '') +
+    (notes.length ? `\n\n<details><summary>Healthy / not-yet-due / inside the queue grace (${notes.length})</summary>\n\n${notes.map((n) => `- ${n}`).join('\n')}\n\n</details>` : '') +
     `\nAudit run: ${process.env.GITHUB_SERVER_URL || 'https://github.com'}/${REPO}/actions/runs/${process.env.GITHUB_RUN_ID || '<local>'}`;
 
   const marker = `Weekly schedule heartbeat (${stamp})`;

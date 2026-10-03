@@ -15,10 +15,21 @@
 import { describe, it, expect } from 'vitest';
 import {
   SCHEDULE_GRACE_MS,
+  classifyMiss,
+  formatLag,
   overdueState,
   parseCron,
   prevFireBefore,
 } from '../scripts/heartbeat-audit.mjs';
+
+// Run-list shapes, newest first, exactly as the Actions API returns them.
+const RUN = (id: string, startedAt: string) => ({
+  id,
+  status: 'completed',
+  conclusion: 'success',
+  run_started_at: startedAt,
+  created_at: startedAt,
+});
 
 const HOUR = 60 * 60 * 1000;
 
@@ -91,5 +102,63 @@ describe('schedule heartbeat queue grace', () => {
     const lastDue = prevFireBefore(c, now);
     expect(lastDue).not.toBeNull();
     expect(overdueState(lastDue!, now)).toBe('dead');
+  });
+});
+// A grace turns silence into patience, but silence alone cannot tell a slow
+// queue from a dying schedule. The note therefore classifies the miss from the
+// schedule's own history - and the two classes deserve very different amounts
+// of trust, so they are pinned separately.
+describe('schedule heartbeat miss classification', () => {
+  const LAST_DUE = Date.parse('2026-10-03T07:17:00Z');
+  const PREV_DUE = Date.parse('2026-09-03T07:17:00Z');
+
+  it('calls an empty run list the 60-day signature, not queue lag', () => {
+    const miss = classifyMiss([], LAST_DUE, PREV_DUE);
+    expect(miss.kind).toBe('never-fired');
+    expect(miss.priorLagMs).toBeNull();
+  });
+
+  it('treats a missing run list the same as an empty one', () => {
+    expect(classifyMiss(undefined, LAST_DUE, PREV_DUE).kind).toBe('never-fired');
+  });
+
+  it('measures the previous slot lag when the schedule has fired before', () => {
+    // The real Verifier drill run: due 08:23Z, started 16:48Z = 8h25m54s.
+    const runs = [RUN('36453738808', '2026-09-28T16:48:54Z')];
+    const miss = classifyMiss(runs, LAST_DUE, PREV_DUE);
+    expect(miss.kind).toBe('has-history');
+    expect(miss.priorLagMs).toBe(Date.parse('2026-09-28T16:48:54Z') - PREV_DUE);
+  });
+
+  it('does not report a lag for a run at or after the due slot', () => {
+    // Defensive: if a run DOES cover lastDue the caller takes the ok branch,
+    // so classifyMiss must never quote a negative "lag" if that ever changes.
+    const runs = [RUN('999', '2026-10-03T19:00:00Z')];
+    expect(classifyMiss(runs, LAST_DUE, PREV_DUE).priorLagMs).toBeNull();
+  });
+
+  it('has no lag to quote when there is no previous slot to compare against', () => {
+    const runs = [RUN('1', '2026-09-29T07:20:00Z')];
+    expect(classifyMiss(runs, LAST_DUE, null).priorLagMs).toBeNull();
+  });
+
+  it('survives an unparseable run timestamp', () => {
+    const runs = [{ id: '2', status: 'completed', conclusion: null, run_started_at: 'not-a-date', created_at: 'not-a-date' }];
+    const miss = classifyMiss(runs, LAST_DUE, PREV_DUE);
+    expect(miss.kind).toBe('has-history');
+    expect(miss.priorLagMs).toBeNull();
+  });
+
+  it('formats lag in the unit a human can act on', () => {
+    expect(formatLag(8 * HOUR + 25 * 60 * 1000 + 54000)).toBe('8h26m');
+    expect(formatLag(90 * 60 * 1000)).toBe('1h30m');
+    expect(formatLag(45 * 60 * 1000)).toBe('45m');
+    expect(formatLag(0)).toBe('0m');
+  });
+
+  it('never prints NaN or undefined into the note', () => {
+    expect(formatLag(null)).not.toMatch(/NaN|undefined/);
+    expect(formatLag(undefined)).not.toMatch(/NaN|undefined/);
+    expect(formatLag(Number.NaN)).not.toMatch(/NaN|undefined/);
   });
 });

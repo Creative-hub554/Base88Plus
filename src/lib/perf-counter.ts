@@ -53,11 +53,38 @@
  *  - Anything not charged by a call site. The counter is only as complete as
  *    the charge sites, and a charge site inside an early return is a hole.
  *
+ * WHAT IS NOW COUNTED, after #122 finished the job #120 started:
+ * TWENTY-SEVEN of the timing gate's thirty-three probes. The markdown parser
+ * and the reply helpers were first, then the demo scanners — `forEachTag`,
+ * `forEachTagRun`, `indexOfCloseAnchor`, `textBetween`, the link audit, the
+ * three demo gates and the sanitiser. That corpus was not chosen for convenience: it is the set
+ * of functions this repo has actually shipped a superlinearity bug in, four of
+ * them in a single afternoon.
+ *
+ * The demo scanners needed one idea the reply helpers did not. They are
+ * already hand-written loops, so their work is visible — but charging how far
+ * a WALK ADVANCED would have been worse than not counting them at all. Every
+ * quadratic scanner this repo has had advanced one character per `<` while
+ * re-reading the remainder, so a progress-based count reads perfectly linear
+ * while the work goes quadratic. What is charged instead is the distance each
+ * `indexOf` SEARCHED, the whole remainder included when it finds nothing.
+ * Reintroducing the #115 retry in `forEachTag` now reads 3.87x on the work gate
+ * and 2.00x on every ratio-based instrument in the repo.
+ *
  * THE COST WHEN DISARMED is one boolean test per charge site, and charge sites
  * are placed at scan exits rather than in loops, so a disarmed charge is off
- * the hot path entirely. Measured: see the PR description. The streaming parser
- * already counts unconditionally in production (`stats().charsParsed`), so this
- * is strictly cheaper than a precedent the repo accepted for the same reason.
+ * the hot path entirely. Measured directly, over 20 million calls in a tight
+ * loop: **10.1 ns per call disarmed**, 15.6 ns armed — the armed half is paid
+ * only inside a `measureWork`, which is tests. Against the smallest function
+ * instrumented in #122 that is under 0.005% of its own runtime, which is why
+ * the A/B that motivated the direct measurement could not resolve it: with a
+ * per-call charge at 10ns, a `visibleText` call measured at 4.0ms for 20,000
+ * tags cannot move. Reading the A/B instead reports noise in both directions
+ * across identical runs (-4.7% to +7.2% for the same pair), consistent with
+ * the 7.5% spread this repo measures on an UNCHANGED build. The streaming
+ * parser already counts unconditionally in production (`stats().charsParsed`),
+ * so this is strictly cheaper than a precedent the repo accepted for the same
+ * reason.
  *
  * NOT PRODUCTION INFRASTRUCTURE. Nothing in `src/` calls `measureWork`; only
  * tests do. If that ever changes the counting is a per-call cost on a user path

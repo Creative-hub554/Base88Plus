@@ -2,6 +2,13 @@
 // Tag scanning — linear, and shared so three callers cannot disagree
 // ---------------------------------------------------------------------------
 
+// The `.ts` extension is deliberate and load-bearing: scripts/demo-link-audit.mjs
+// imports THIS file straight into plain node, which does no extension
+// resolution, so an extensionless import here breaks `npm run audit:demos`.
+// It is the only import this module has, and the only reason the file is
+// not dependency-free.
+import { chargeWork } from "./perf-counter.ts";
+
 /** A tag found by `forEachTag`: `[start, end)` of the original string. */
 export type TagSpan = {
   /** Index of the `<`. */
@@ -48,9 +55,24 @@ export function forEachTag(
   limit = Number.POSITIVE_INFINITY,
 ): void {
   let pos = from;
+  // WHAT IS CHARGED IS WHAT WAS SEARCHED, not how far the walk advanced, and
+  // the difference is the whole point. Charging `pos` would understate exactly
+  // the regression this instrument exists for: a scanner that restarted the
+  // remainder once per `<` advances `pos` by one each time, so its charged
+  // count would stay perfectly linear while its real work went quadratic. A
+  // native `indexOf` is therefore charged the distance it had to look across —
+  // including the whole remainder when it finds nothing, which is exactly the
+  // work the quadratic shape used to pay.
+  let scanned = 0;
   while (pos < html.length && pos < limit) {
     const lt = html.indexOf("<", pos);
-    if (lt === -1 || lt >= limit) return;
+    if (lt === -1) {
+      // Looked for `<` across the remainder and found none.
+      scanned += html.length - pos;
+      break;
+    }
+    scanned += lt - pos + 1;
+    if (lt >= limit) break;
     // The regex required a letter after `<`. Without one it is not a tag, and
     // the engine moved on by a single character — so do the same, rather than
     // jumping to the next `<`, which would step over a real tag in between.
@@ -59,10 +81,17 @@ export function forEachTag(
       continue;
     }
     const gt = html.indexOf(">", lt + 1);
-    if (gt === -1) return;
+    if (gt === -1) {
+      // No `>` ahead, so no tag can start anywhere further along either — but
+      // the search for one did read all the way to the end.
+      scanned += html.length - lt;
+      break;
+    }
+    scanned += gt - lt;
     visit({ start: lt, end: gt + 1 });
     pos = gt + 1;
   }
+  chargeWork(scanned);
 }
 
 /**
@@ -84,15 +113,27 @@ export function forEachTagRun(
   limit = Number.POSITIVE_INFINITY,
 ): void {
   let pos = from;
+  // Charged exactly as `forEachTag` is, and for the same reason.
+  let scanned = 0;
   while (pos < html.length && pos < limit) {
     const lt = html.indexOf("<", pos);
     // No `<` before the limit: nothing left in the window.
-    if (lt === -1 || lt >= limit) return;
+    if (lt === -1) {
+      scanned += html.length - pos;
+      break;
+    }
+    scanned += lt - pos + 1;
+    if (lt >= limit) break;
     const gt = html.indexOf(">", lt + 1);
-    if (gt === -1) return;
+    if (gt === -1) {
+      scanned += html.length - lt;
+      break;
+    }
+    scanned += gt - lt;
     visit({ start: lt, end: gt + 1 });
     pos = gt + 1;
   }
+  chargeWork(scanned);
 }
 
 /**
@@ -109,14 +150,22 @@ export function forEachTagRun(
  * from the wrong offset. Matching single ASCII characters cannot shift that.
  */
 export function indexOfCloseAnchor(html: string, from: number): number {
+  // This one reads the document a character at a time, so its count is its own
+  // progress rather than a search distance — and it must stop counting at the
+  // match, because that is what keeps the caller linear. `anchorLabelAt` calls
+  // it once per anchor: charge the whole remainder per call and the audit
+  // becomes quadratic on a page with many links.
   for (let i = from; i + 4 <= html.length; i += 1) {
     if (html.charCodeAt(i) !== 60) continue; // <
     if (html.charCodeAt(i + 1) !== 47) continue; // /
     const letter = html.charCodeAt(i + 2);
     if (letter !== 97 && letter !== 65) continue; // a or A
     if (html.charCodeAt(i + 3) !== 62) continue; // >
+    chargeWork(i - from + 4);
     return i;
   }
+  // No `</a>` anywhere: the whole remainder really was read.
+  chargeWork(Math.max(0, html.length - from));
   return -1;
 }
 /**
@@ -145,9 +194,11 @@ export function indexOfCloseAnchor(html: string, from: number): number {
  * there legitimately. They are counted (`placeholders`) and reported, never
  * failed.
  *
- * Deliberately dependency-free (no fs, no node builtins, no `@/` alias) so
- * the same file is importable from the app, from vitest, and from the plain
- * node CLI in scripts/demo-link-audit.mjs.
+ * Deliberately near-dependency-free (no fs, no node builtins, no `@/` alias,
+ * and exactly one import: the work counter) so the same file is importable
+ * from the app, from vitest, and from the plain node CLI in
+ * scripts/demo-link-audit.mjs. That last one is why the counter import
+ * spells out its `.ts` extension.
  */
 
 export interface DemoAuditFile {
@@ -183,6 +234,9 @@ export interface DemoLinkAudit {
 
 /** Slug of a link label or a page stem: "About Us" and "about_us" both slug to "about-us". */
 export function linkPageSlug(label: string): string {
+  // Five passes over the label — lowercase, the `&` rewrite, the non-alphanumeric
+  // collapse, `trim`, the whitespace collapse — and the joins between them.
+  chargeWork(5 * label.length);
   return label
     .toLowerCase()
     .replace(/&/g, " and ")
@@ -282,6 +336,9 @@ export function textBetween(html: string, from: number, to: number): string {
     to,
   );
   out += html.slice(last, to);
+  // The rebuild reads the whole window once more, on top of the tag walk
+  // `forEachTagRun` charged for itself.
+  chargeWork(to - from);
   return out.trim();
 }
 
@@ -312,6 +369,8 @@ export function anchorLabelAt(html: string, tagEnd: number): string {
  * anything that reaches here is a file that should exist.
  */
 export function resolveDemoPath(fromFile: string, rawPath: string): string {
+  // Two splits and a join, every one of them over these two strings.
+  chargeWork(fromFile.length + rawPath.length);
   const base = rawPath.startsWith("/")
     ? []
     : fromFile.split("/").slice(0, -1);
@@ -352,6 +411,10 @@ function idValue(m: RegExpExecArray): string {
 
 function collectIds(html: string): Set<string> {
   const ids = new Set<string>();
+  // One regex pass over the page. What the engine reads inside is not
+  // observable, so the document it was handed is what gets charged — the same
+  // convention `stripCodeBlocks` already uses, and an upper bound on it.
+  chargeWork(html.length);
   AUDIT_ID_RE.lastIndex = 0;
   for (let m = AUDIT_ID_RE.exec(html); m !== null; m = AUDIT_ID_RE.exec(html)) {
     const id = idValue(m);
@@ -382,6 +445,10 @@ export function auditDemoLinks(files: DemoAuditFile[]): DemoLinkAudit {
   const problems: DemoLinkProblem[] = [];
   let checked = 0;
   let placeholders = 0;
+  // The attribute regex reads each tag once. Accumulated and charged once:
+  // charging per tag would be a charge per match, which measured 19ns each and
+  // +10.9% on the one function here that already does that.
+  let scanned = 0;
 
   for (const file of files) {
     if (!file.path.toLowerCase().endsWith(".html")) continue;
@@ -389,6 +456,7 @@ export function auditDemoLinks(files: DemoAuditFile[]): DemoLinkAudit {
     const ids = collectIds(html);
     forEachTag(html, (span) => {
       const tag = html.slice(span.start, span.end);
+      scanned += tag.length;
       const label =
         tagNameOf(tag) === "a" ? anchorLabelAt(html, span.end) : undefined;
       AUDIT_ATTR_RE.lastIndex = 0;
@@ -441,6 +509,7 @@ export function auditDemoLinks(files: DemoAuditFile[]): DemoLinkAudit {
     });
   }
 
+  chargeWork(scanned);
   const dead = problems.filter((p) => p.reason === "dead");
   const inert = problems.filter((p) => p.reason === "inert");
   return {

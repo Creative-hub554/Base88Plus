@@ -31,6 +31,9 @@
  * scripts/ CLI can all import the same rules.
  */
 import { forEachTagRun } from "./demo-link-audit";
+// The `.ts` extension matches lib/demo-link-audit.ts, which the plain node CLI
+// loads without extension resolution. See the comment there.
+import { chargeWork } from "./perf-counter.ts";
 
 export interface GateFile {
   path: string;
@@ -64,6 +67,10 @@ const FILE_TOKEN_RE = /\b[\w-]+\.(?:html|js|css|json)\b/gi;
  * and cannot false-positive on the other four.
  */
 export function missingBriefFiles(brief: string, files: GateFile[]): string[] {
+  // One pass over the brief. Charged as the document, for the same reason as
+  // every other single-regex pass in this file: the engine's own reads are not
+  // observable, and the document is the honest upper bound on them.
+  chargeWork(brief.length);
   const emitted = new Set(files.map((f) => f.path.toLowerCase()));
   const wanted = new Set<string>();
   for (const m of brief.matchAll(FILE_TOKEN_RE)) {
@@ -114,6 +121,9 @@ export function visibleText(html: string): string {
     cursor = m.index + m[0].length;
   }
   stripped += html.slice(cursor);
+  // The script/style pass, above: one read of the document. The tag walk that
+  // follows charges itself through `forEachTagRun`.
+  chargeWork(html.length);
 
   // A removed tag must LEAVE A SPACE behind it. Dropping "</li><li>" with
   // nothing in between fuses the two words into "FeaturesFeature", which no
@@ -130,14 +140,20 @@ export function visibleText(html: string): string {
     last = tag.end;
   });
   text += stripped.slice(last);
+  // And `split`/`join` reads the whole stripped document a third time.
+  chargeWork(text.length);
   return text.split(/\s+/).filter(Boolean).join(" ");
 }
 
 export function fillerHits(files: GateFile[]): string[] {
   const hits = new Set<string>();
+  // Both filler regexes read the visible text of every page; accumulated and
+  // charged once rather than per match, for the cost reason in the header.
+  let scanned = 0;
   for (const f of files) {
     if (!f.path.toLowerCase().endsWith(".html")) continue;
     const text = visibleText(f.content);
+    scanned += text.length;
     FILLER_RE.lastIndex = 0;
     for (let m = FILLER_RE.exec(text); m !== null; m = FILLER_RE.exec(text)) {
       hits.add(m[0].trim());
@@ -151,6 +167,7 @@ export function fillerHits(files: GateFile[]): string[] {
       hits.add(m[0].trim());
     }
   }
+  chargeWork(scanned);
   return [...hits].sort();
 }
 
@@ -176,6 +193,7 @@ function isGuarded(script: string, binding: string, from: number): boolean {
 
 function idsIn(html: string): Set<string> {
   const ids = new Set<string>();
+  chargeWork(html.length);
   ID_RE.lastIndex = 0;
   for (let m = ID_RE.exec(html); m !== null; m = ID_RE.exec(html)) {
     const id = m[1] ?? m[2];
@@ -186,6 +204,7 @@ function idsIn(html: string): Set<string> {
 
 function scriptsLinkedFrom(html: string): string[] {
   const out: string[] = [];
+  chargeWork(html.length);
   SCRIPT_SRC_RE.lastIndex = 0;
   for (let m = SCRIPT_SRC_RE.exec(html); m !== null; m = SCRIPT_SRC_RE.exec(html)) {
     const src = (m[1] ?? m[2] ?? "").split("?")[0].trim();
@@ -212,6 +231,10 @@ function scriptsLinkedFrom(html: string): string[] {
 export function selectorProblems(files: GateFile[]): string[] {
   const byPath = new Map(files.map((f) => [f.path.toLowerCase(), f]));
   const problems: string[] = [];
+  // Every linked script is read once per page that links it, plus a 400-char
+  // guard window per selector it binds. Both are real passes over real
+  // characters, so both are counted.
+  let scanned = 0;
   for (const page of files) {
     if (!page.path.toLowerCase().endsWith(".html")) continue;
     const ids = idsIn(page.content);
@@ -220,6 +243,7 @@ export function selectorProblems(files: GateFile[]): string[] {
         byPath.get(src.toLowerCase()) ??
         byPath.get(src.split("/").pop()?.toLowerCase() ?? "");
       if (!script) continue;
+      scanned += script.content.length;
       SELECTOR_RE.lastIndex = 0;
       for (
         let m = SELECTOR_RE.exec(script.content);
@@ -229,6 +253,9 @@ export function selectorProblems(files: GateFile[]): string[] {
         const binding = m[1];
         const id = m[2] ?? m[3];
         if (!id || ids.has(id)) continue;
+        // `isGuarded` slices its 400-character window whether or not the guard
+        // is there, so the window is charged before the answer is known.
+        scanned += 400;
         if (isGuarded(script.content, binding, m.index + m[0].length)) continue;
         problems.push(
           `${page.path} links ${script.path}, which uses #${id} unguarded — that page has no #${id}`,
@@ -236,6 +263,7 @@ export function selectorProblems(files: GateFile[]): string[] {
       }
     }
   }
+  chargeWork(scanned);
   return [...new Set(problems)].sort();
 }
 

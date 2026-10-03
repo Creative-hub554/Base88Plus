@@ -13,6 +13,56 @@ process. Download zips: the
 ## [Unreleased]
 
 ### Changed
+- The demo scanners now charge the work counter, taking the work gate from
+  eight counted functions to twenty-seven of the timing gate's thirty-three
+  probes: `forEachTag`, `forEachTagRun`, `indexOfCloseAnchor`, `textBetween`,
+  the link audit, the three demo gates, the sanitiser and its fixed-point
+  pass.
+
+  Those are the functions this repo has actually shipped a superlinearity bug
+  in, so counting them is what makes the gate mean anything about the code it
+  guards. They were also the awkward half: unlike the reply helpers, which
+  were single regex passes, these are hand-written loops whose work was
+  already visible. The question was not whether to charge but WHICH number to
+  charge, and the obvious answer is worthless here.
+
+  **Progress is the wrong number.** Every quadratic scanner this repo has had
+  advances one character per `<` while re-reading the remainder, so a count
+  taken from how far the walk got reads perfectly linear while the work goes
+  quadratic. Charging progress would have installed a gate that passes on
+  precisely the bug it exists to catch. What is charged instead is the
+  distance each `indexOf` SEARCHED, the whole remainder included when it
+  finds nothing.
+
+  Verified by putting the #115 regression back: restoring the one line that
+  ends the scan when there is no `>` ahead takes the audit entries to
+  **3.87x** work, against this gate's 2.50 limit, while every ratio-only
+  instrument in the repo — including the timing gate — reads 2.00x, because a
+  ratio cannot see a function that was already quadratic at both ends of the
+  ladder. Two more teeth: charging the sanitiser's document a second time
+  costs no growth at all and is caught only by the per-character cap, and
+  deleting a charge site is caught by the exact counts.
+
+  Nineteen of the new entries carry exact counts, measured rather than
+  estimated: `forEachTag` 17n, `forEachTagRun` 5n+5, `textBetween` 44n,
+  `visibleText` 49n, `fillerHits` 108n, the sanitiser 60n+25 on a clean page
+  and 55n+28 on the unterminated-anchor shape, `demoLooksComplete` 21n+6, and
+  `resolveDemoPath` the two input lengths summed.
+
+  **Cost: 10.1ns per charge site, measured directly** over 20 million calls in
+  a tight loop (15.6ns armed, which only happens inside a test). The
+  whole-function A/B could not resolve it and reported noise in both
+  directions across identical runs (-4.7% to +7.2%), consistent with the 7.5%
+  this repo measures on an unchanged build; that measurement is reported here
+  as the inconclusive thing it is, rather than as a cost.
+
+- `src/lib/demo-link-audit.ts` has one import now, not zero, and `tsconfig`
+  permits the `.ts` extension it needs. `scripts/demo-link-audit.mjs` imports
+  that file straight into plain node, which does no extension resolution, so
+  an extensionless import there breaks `npm run audit:demos`. Found by running
+  that command, which is the argument for running it.
+
+### Changed
 - `isEmptyFenceOutput` is now an explicit character scan instead of
   `narration.replace(/```[a-zA-Z]*/g, "").trim().length === 0`, which makes it
   work-countable and removes two full-length copies of the reply from a

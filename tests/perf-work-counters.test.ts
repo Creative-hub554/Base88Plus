@@ -59,6 +59,19 @@
  * when the deterministic instrument wants a rewrite the code can afford, do the
  * rewrite instead of documenting the hole.
  *
+ * The demo scanners joined in #122, which took the coverage from eight
+ * functions to twenty-seven of the timing gate's thirty-three probes: the tag
+ * walk, the link audit, the three demo gates and the sanitiser. What they
+ * needed is the point of their entries — these are hand-written loops already,
+ * so the honest question was not whether their work is visible but WHICH
+ * number to charge. Progress would have been useless: every quadratic scanner
+ * this repo has shipped advances one character per `<` while re-reading the
+ * remainder, so a progress count reads linear while the work goes quadratic.
+ * What is charged is the distance each `indexOf` SEARCHED, remainder included
+ * when it finds nothing. Restoring the #115 retry in `forEachTag` — one line —
+ * takes the audit entries to 3.87x here while every ratio-only instrument in
+ * the repo stays at 2.00x.
+ *
  * One function still cannot be counted — `isSummaryImitation`, whose work is
  * one anchored regex `test()` — and there is a test that pins that fact, so
  * the gap cannot quietly grow back.
@@ -82,6 +95,25 @@ import {
   shouldOfferContinue,
   stripCodeBlocks,
 } from "@/lib/prompt";
+import {
+  auditDemoLinks,
+  demoNavIsWired,
+  forEachTag,
+  forEachTagRun,
+  resolveDemoPath,
+  textBetween,
+} from "@/lib/demo-link-audit";
+import {
+  fillerHits,
+  missingBriefFiles,
+  runDemoGates,
+  selectorProblems,
+  visibleText,
+} from "@/lib/demo-gates";
+import { demoLooksComplete, sanitizeDemoFiles } from "@/lib/template-generation";
+import type { DemoAuditFile } from "@/lib/demo-link-audit";
+import type { GateFile } from "@/lib/demo-gates";
+import type { ProjectFile } from "@/lib/types";
 
 /**
  * How fast a function's WORK may grow per doubling of its input.
@@ -275,6 +307,18 @@ type Counted = {
   exactWork?: (n: number) => number;
 };
 
+/** The brief `missingBriefFiles` is handed: real length, digits and all. */
+function briefOf(n: number): string {
+  const names: string[] = [];
+  for (let i = 0; i < n; i++) names.push(`mod${i}.js`);
+  return names.join(" ");
+}
+
+/** A path with n segments, for the resolvers. */
+function segPathOf(n: number): string {
+  return Array.from({ length: n }, (_, i) => `d${i}`).join("/") + "/file.html";
+}
+
 const COUNTED: Counted[] = [
   {
     // The #113 shape, and the clearest case for counting in this repo. With the
@@ -415,7 +459,310 @@ const COUNTED: Counted[] = [
     // 48n of document plus 23n of matched text.
     maxWorkPerChar: 1.6,
   },
+
+  {
+    // The shared tag walk, and the reason these scanners are countable at all:
+    // they were rewritten away from `/<[a-zA-Z][^>]*>/g` in #115, and a loop
+    // is something JavaScript can be told how much of. The count is NOT the
+    // distance the walk advanced — it is the distance each `indexOf` searched,
+    // because the quadratic shape this instrument exists to catch advanced by
+    // one character per `<` while re-reading the whole remainder.
+    //
+    // 17 characters per `<a href="x">y</a>` unit: the search to each `<`, the
+    // search to each `>`, and the trailing `</a>` that is not an opening tag.
+    name: "link-audit / forEachTag: well-formed tags",
+    build: (n) => {
+      const html = '<a href="x">y</a>'.repeat(n);
+      return () => {
+        forEachTag(html, () => {});
+      };
+    },
+    inputSize: (n) => 18 * n,
+    exactWork: (n) => 17 * n,
+    maxWorkPerChar: 1.09,
+  },
+  {
+    // The #115 shape with a terminator: n terminated runs and then one tag with
+    // no `>`. The final search reads the whole remainder and finds nothing,
+    // which is the +4 and +1 the exact count carries.
+    name: "link-audit / forEachTagRun: terminated runs then an unterminated tag",
+    build: (n) => {
+      const html = "<div>".repeat(n) + "<div";
+      return () => {
+        forEachTagRun(html, () => {});
+      };
+    },
+    inputSize: (n) => 5 * n + 4,
+    exactWork: (n) => 5 * n + 5,
+    maxWorkPerChar: 1.16,
+  },
+  {
+    // Two passes over the window: the tag walk `forEachTagRun` charges for
+    // itself, and then the rebuild reads it again. Exactly 2x, which makes it
+    // the cleanest statement in this file of what a "pass" costs.
+    name: "link-audit / textBetween: many anchors",
+    build: (n) => {
+      const html = '<a href="x">label</a> '.repeat(n);
+      return () => void textBetween(html, 0, html.length);
+    },
+    inputSize: (n) => 22 * n,
+    exactWork: (n) => 44 * n,
+    maxWorkPerChar: 2.3,
+  },
+  {
+    // The audit, on the shape that once hid a quadratic: a page whose tail is
+    // one unterminated anchor after another. No exact count here, because the
+    // four real links before it are a fixed cost the ladder cannot divide out.
+    name: "link-audit / auditDemoLinks: real links then unterminated tags",
+    build: (n) => {
+      const content = '<a href="x">y</a>'.repeat(4) + "<div".repeat(n);
+      return () => void auditDemoLinks([{ path: "index.html", content }]);
+    },
+    inputSize: (n) => 72 + 4 * n,
+    maxWorkPerChar: 2.65,
+  },
+  {
+    // Many pages, many links each. The per-char figure drifts gently UPWARD
+    // across the ladder — the page stems in the filenames gain digits — which
+    // is why the drift pin exists next to the ratio pin.
+    name: "link-audit / auditDemoLinks: many pages x many links",
+    build: (n) => {
+      const files: DemoAuditFile[] = [];
+      for (let i = 0; i < n; i++) {
+        files.push({ path: `p${i}.html`, content: '<a href="x">y</a>'.repeat(4) });
+      }
+      return () => void auditDemoLinks(files);
+    },
+    inputSize: (n) => n * 73,
+    maxWorkPerChar: 4.45,
+  },
+  {
+    // One page, real links then a long unterminated tail: the walk stops at the
+    // first `<` with no `>` ahead instead of retrying at every bracket.
+    name: "link-audit / auditDemoLinks: many links on one page",
+    build: (n) => {
+      const content = linksPage(4) + '<a href="x"'.repeat(n);
+      return () =>
+        void auditDemoLinks([
+          { path: "index.html", content },
+          { path: "page.html", content: "<p>t</p>" },
+        ]);
+    },
+    inputSize: (n) => linksPage(4).length + 11 * n + 8,
+    maxWorkPerChar: 2.6,
+  },
+  {
+    // Three passes over the document: the script/style strip, the tag walk, and
+    // the whitespace collapse `split`/`join`. 49 characters of work per
+    // 21-character `<p>hello world</p>`, exactly, forever.
+    name: "gates / visibleText: many tags",
+    build: (n) => {
+      const html = "<p>hello world</p>".repeat(n);
+      return () => void visibleText(html);
+    },
+    inputSize: (n) => 21 * n,
+    exactWork: (n) => 49 * n,
+    maxWorkPerChar: 2.69,
+  },
+  {
+    // The #115 shape, kept with a terminator so there is real per-tag work to
+    // do: the trailing `<div` survives as text because no `>` follows it.
+    name: "gates / visibleText: tags then an unterminated one",
+    build: (n) => {
+      const html = "<p>hello world</p>".repeat(n) + "<div";
+      return () => void visibleText(html);
+    },
+    inputSize: (n) => 21 * n + 4,
+    exactWork: (n) => 49 * n + 13,
+    maxWorkPerChar: 2.69,
+  },
+  {
+    // Both filler regexes read the visible text of every page, and
+    // `visibleText` itself charges three passes — so this is the composition,
+    // and it is the honest figure: a gate that ran the filler scan twice would
+    // show up here immediately.
+    name: "gates / fillerHits: many files with filler copy",
+    build: (n) => {
+      const files: GateFile[] = [];
+      for (let i = 0; i < n; i++) {
+        files.push({ path: `p${i}.html`, content: "<p>Feature 1 and Project 2</p>" });
+      }
+      return () => void fillerHits(files);
+    },
+    inputSize: (n) => 38 * n,
+    exactWork: (n) => 108 * n,
+    maxWorkPerChar: 3.27,
+  },
+  {
+    // The gate that produced the `saas` finding: one app.js linked from every
+    // page, selected against every page. Cost is pages x selectors, and the
+    // highest per-char figure in this file — two passes per page plus a whole
+    // script read and a 400-character guard window, for every selector.
+    name: "gates / selectorProblems: many pages sharing one script",
+    build: (n) => {
+      const files: GateFile[] = [];
+      for (let i = 0; i < n; i++) {
+        files.push({
+          path: `p${i}.html`,
+          content: `<body><script src="app.js"></script><p id="only${i}">x</p></body>`,
+        });
+      }
+      files.push({
+        path: "app.js",
+        content: 'const el = document.querySelector("#absent");\nel.addEventListener("click", () => {});',
+      });
+      return () => void selectorProblems(files);
+    },
+    inputSize: (n) => n * 78 + 90,
+    maxWorkPerChar: 9.05,
+  },
+  {
+    // Counted through its three gates, not in its own body — `runDemoGates`
+    // charges nothing itself and is exactly the composition of the entries
+    // above, which is what makes it the best single number in this file for
+    // "what does one full gate run cost".
+    name: "gates / runDemoGates: full gate run over many pages",
+    build: (n) => {
+      const files: GateFile[] = [];
+      for (let i = 0; i < n; i++) {
+        files.push({
+          path: `p${i}.html`,
+          content: `<body><script src="app.js"></script><p>Feature 1</p></body>`,
+        });
+      }
+      files.push({ path: "app.js", content: "const el = document.getElementById('x');" });
+      return () => void runDemoGates("p0.html", files);
+    },
+    inputSize: (n) => n * 76 + 60,
+    maxWorkPerChar: 10.1,
+  },
+  {
+    // One pass over the brief and nothing else — so the count IS the input
+    // length, to the character. The input size is the brief's real length
+    // rather than a formula for it: an estimate that drifts is a drift this
+    // file would report as the function getting worse.
+    name: "gates / missingBriefFiles: a brief naming many files",
+    build: (n) => {
+      const brief = briefOf(n);
+      return () => void missingBriefFiles(brief, []);
+    },
+    inputSize: (n) => briefOf(n).length,
+    maxWorkPerChar: 1.15,
+  },
+  {
+    // The sanitiser, on a page with nothing to fix. Five passes per unit: the
+    // strip walk, the fixed-point loop's second pass, the unescape rebuild,
+    // the relink tag walk and the relink rebuild. The +25 is the page's own
+    // opening tag and the constant tail of those walks.
+    name: "sanitiser / sanitizeDemoFiles: well-formed page",
+    build: (n) => {
+      const files: ProjectFile[] = [{ path: "index.html", content: "<p>hello</p>".repeat(n) }];
+      return () => void sanitizeDemoFiles(files);
+    },
+    inputSize: (n) => 12 * n + 12,
+    exactWork: (n) => 60 * n + 25,
+    maxWorkPerChar: 5.75,
+  },
+  {
+    // The 730ms case: unterminated anchors. The point of counting it is that
+    // the quadratic it used to have was INVISIBLE here — every `<` advanced the
+    // walk by one character, so a count taken from progress would have read
+    // linear. This count is taken from search distance, and it is linear.
+    name: "sanitiser / sanitizeDemoFiles: unterminated anchors (the #115 shape)",
+    build: (n) => {
+      const files: ProjectFile[] = [{ path: "index.html", content: '<a href="x"'.repeat(n) }];
+      return () => void sanitizeDemoFiles(files);
+    },
+    inputSize: (n) => 11 * n + 12,
+    exactWork: (n) => 55 * n + 28,
+    maxWorkPerChar: 5.75,
+  },
+  {
+    // The pass that actually changes something: a broken `<img src>` per unit,
+    // dropped from the output. The lowest per-char figure in the file, because
+    // a page of broken refs never reaches the relink walk's per-anchor work.
+    name: "sanitiser / sanitizeDemoFiles: broken refs to neutralise",
+    build: (n) => {
+      const files: ProjectFile[] = [
+        { path: "index.html", content: '<img src="pic.png" alt="x">'.repeat(n) },
+      ];
+      return () => void sanitizeDemoFiles(files);
+    },
+    inputSize: (n) => 28 * n + 12,
+    exactWork: (n) => 35 * n + 25,
+    maxWorkPerChar: 1.44,
+  },
+  {
+    // The relink path, and the O(files x pages) shape #115 removed. The drift
+    // is the page stems in the filenames gaining digits; the cap is set from
+    // the top of the ladder, not from the middle of it.
+    name: "sanitiser / sanitizeDemoFiles: placeholder nav across many pages",
+    build: (n) => {
+      const files: ProjectFile[] = [];
+      for (let i = 0; i < n; i++) {
+        files.push({ path: "index.html", content: `<a href="#">Page ${i}</a>` });
+        files.push({ path: `page-${i}.html`, content: "<body><p>page</p></body>" });
+      }
+      return () => void sanitizeDemoFiles(files);
+    },
+    inputSize: (n) => n * 48,
+    maxWorkPerChar: 8.9,
+  },
+  {
+    // The generation gate. One pass per file, so the count is the total content
+    // of the demo — charged as the documents, because what a regex reads
+    // inside is not observable from JavaScript and the document is the honest
+    // upper bound on it.
+    name: "sanitiser / demoLooksComplete: many files",
+    build: (n) => {
+      const files: ProjectFile[] = [];
+      for (let i = 0; i < n; i++) {
+        files.push({ path: `p${i}.html`, content: "<body><p>x</p></body>" });
+      }
+      files.push({ path: "style.css", content: "body{}" });
+      return () => void demoLooksComplete(files);
+    },
+    inputSize: (n) => n * 31 + 22,
+    exactWork: (n) => 21 * n + 6,
+    maxWorkPerChar: 0.78,
+  },
+  {
+    // Counted through `auditDemoLinks`, like `shouldOfferContinue` is counted
+    // through `isEmptyFenceOutput`: the wrapper charges nothing and exists only
+    // to ask the question below it.
+    name: "link-audit / demoNavIsWired: many pages of nav to one target",
+    build: (n) => {
+      const files: DemoAuditFile[] = [];
+      for (let i = 0; i < n; i++) {
+        files.push({ path: `p${i}.html`, content: `<a href="#">Page ${i}</a>` });
+        files.push({ path: `page-${i}.html`, content: "<body><p>page</p></body>" });
+      }
+      return () => void demoNavIsWired(files);
+    },
+    inputSize: (n) => n * 48,
+    maxWorkPerChar: 6.2,
+  },
+  {
+    // The cheapest probe in the corpus, and counted like any other: two splits
+    // and a join over the two strings it was handed. The count is those two
+    // lengths, summed, which is why it can be pinned exactly.
+    name: "link-audit / resolveDemoPath: a deeply segmented target",
+    build: (n) => {
+      const target = segPathOf(n);
+      return () => void resolveDemoPath("a/b/c/page.html", target);
+    },
+    inputSize: (n) => segPathOf(n).length + "a/b/c/page.html".length,
+    exactWork: (n) => segPathOf(n).length + "a/b/c/page.html".length,
+    maxWorkPerChar: 1.2,
+  },
 ];
+
+/** Four real links with placeholder hrefs, for the audit entries. */
+function linksPage(k: number): string {
+  return Array.from({ length: k }, (_, i) => `<a href="#">Page ${i}</a>`).join("");
+}
+;
+
 
 describe("no counted hot path does superlinear work", () => {
   for (const entry of COUNTED) {

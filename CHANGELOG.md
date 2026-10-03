@@ -13,6 +13,42 @@ process. Download zips: the
 ## [Unreleased]
 
 ### Added
+- The superlinearity gate now states, as measured fact, exactly what it can
+  and cannot see. Driving synthetic probes of known exponent through the
+  harness (cost exactly `n^p`) gives the whole envelope in one run:
+
+  | exponent | measured worst ratio | at the 3.0 limit |
+  |---|---|---|
+  | n^1.00 | 2.09 | passes (correct — it *is* linear) |
+  | n^1.50 | 2.70 | passes (**invisible**) |
+  | n^1.58 | 2.93 | passes (just under) |
+  | n^1.65 | 3.62 | **flagged** |
+  | n^2.00 | 3.93 | **flagged** |
+
+  Two conclusions. The 3.0 threshold sits 49.5% of the way between a measured
+  linear 2.09 and a measured quadratic 3.93 — the midpoint, which is where a
+  symmetric-noise instrument wants it — and the measured detection floor
+  (n^1.65) lands within 4% of the theoretical one (log2 3 = 1.585). The
+  instrument is performing near the best a time-doubling ratio can do.
+
+  And the honest part: **a regression to n^1.5 is invisible to this gate.** It
+  reads 2.70 and passes. That is not fixable by lowering the limit — catching
+  2.70 would need a limit near 2.5, and a linear function already measures
+  2.09-2.16, so the margin would sit inside the noise the harness exists to
+  tolerate. Chasing n^1.5 would buy a sub-quadratic regression at the cost of
+  a gate that flakes, which is the one thing this gate refuses to be. The gap
+  is recorded rather than papered over; if a mild sub-quadratic regression ever
+  appears, the answer is work-counting on that function, as
+  `stats().charsParsed` does in `markdown.ts`.
+
+  The calibration also got stronger as a side effect of measuring this. It now
+  asserts that its quadratic reading is at least 1.5x its own linear reading —
+  both measured in the same test, on the same machine, so the comparison is
+  immune to how fast the box is. That catches the failure that actually
+  threatens the gate, a runner or Node version too noisy to tell the two
+  apart, which would otherwise show up only as real regressions slipping
+  through unnoticed. Verified to fail when the floor is raised past what the
+  instrument can reach.
 - The superlinearity gate's tracked surface is now itself tracked. A gate is
   only as good as its list, and a curated list has one failure mode no amount
   of measurement catches: somebody exports a new function from a hot-path

@@ -141,6 +141,38 @@ process. Download zips: the
   that misses it: it makes the list look longer than the coverage.
 
 ### Added
+- The superlinearity gate now also runs on the Node canary leg, as a
+  non-blocking measurement, so the engine arrives already measured.
+
+  The CI matrix is computed from the Node release schedule, so node 26 becomes
+  a BLOCKING gate on 2026-10-28 with no workflow edit. When that happens the
+  superlinearity gate starts gating on 26 that same day — and every number
+  behind its configuration was taken on the leg it runs on today. Promotion day
+  would have been the first day 26 was ever measured by the instrument about
+  to gate on it. #119 already went the other direction and found the same hole
+  from the inside: the gate was calibrated on a Node 26 laptop and had only
+  ever run on Node 22 in CI, so the first always-report run produced a
+  measurement the gate had been missing its entire life.
+
+  The new job gets its own runner rather than a step in the canary job, for
+  the reason the blocking one has its own: it measures wall-clock time, and
+  folding it in beside the suite would put it on a contended core. Reusing the
+  canary job would have been cheaper in wall-clock minutes and worthless as a
+  measurement.
+
+  **Non-blocking, permanently.** `continue-on-error`, deliberately absent from
+  `ci-ok`'s needs, with `pipefail` so a failed measurement cannot report itself
+  as a success through `tee`. Its output is the point: the envelope goes to the
+  step summary and is archived as a per-node artifact, so the node-26 envelope
+  outlives the log. A measurement that can turn merges red gets muted, and a
+  muted measurement is worse than none.
+
+  All four of those properties are pinned by
+  `scripts/check-node-contract.js` — it follows the computed canary, stays
+  non-blocking, skips itself when there is no canary, and is not wired into the
+  required check — with four drift probes in `tests/node-contract.test.ts`
+  covering deletion, promotion to blocking, wiring into `ci-ok`, and pinning a
+  version instead of following the schedule.
 - A deterministic work gate: six hot paths are now pinned by COUNTING the
   characters they scan, not by timing them, which catches a regression the
   timing gate provably cannot see and one it structurally never will.

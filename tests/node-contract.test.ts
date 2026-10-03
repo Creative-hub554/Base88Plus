@@ -80,6 +80,16 @@ jobs:
         node: \${{ fromJSON(needs.matrix.outputs.canary) }}
     steps:
       - run: echo ok
+  perf-gate-canary:
+    needs: matrix
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    if: needs.matrix.outputs.canary != '[]'
+    strategy:
+      matrix:
+        node: \${{ fromJSON(needs.matrix.outputs.canary) }}
+    steps:
+      - run: npm run check:perf
   ci-ok:
     needs: [matrix, gates]
     runs-on: ubuntu-latest
@@ -123,6 +133,9 @@ describe("check-node-contract — real tree", () => {
     expect(out).toContain("contract holds");
     expect(out).toContain("gates matrix is computed from the release schedule");
     expect(out).toContain("canary job is non-blocking");
+    expect(out).toContain("perf-gate-canary is advisory");
+    expect(out).toContain("perf-gate-canary runs on the computed canary");
+    expect(out).toContain("ci-ok does NOT wait on the advisory canary measurement");
     expect(out).toContain(".nvmrc (node 24) is one of the blocking CI legs");
   }, 15_000);
 
@@ -180,6 +193,88 @@ describe("check-node-contract — drift probes (fixtures)", () => {
     expect(code).toBe(1);
     expect(out).toContain("canary job lost continue-on-error");
     expect(out).toContain("a canary failure would block merges");
+  }, 15_000);
+
+  it("fails when the advisory canary measurement is deleted", async () => {
+    // Without it, node 26 reaches LTS and starts gating the superlinearity
+    // budget of a gate that has never run on it.
+    const workflow = WORKFLOW.replace(
+      /  perf-gate-canary:[\s\S]*?      - run: npm run check:perf\n/,
+      "",
+    );
+    expect(workflow).not.toContain("perf-gate-canary");
+    const dir = tmpProject({ engines: ">=22 <27", nvmrc: "24", workflow });
+    const { code, out } = await runScript(dir, { SCHEDULE_JSON: REAL_SCHEDULE });
+    expect(code).toBe(1);
+    expect(out).toContain("has no perf-gate-canary job");
+    expect(out).toContain("never run on it");
+  }, 15_000);
+
+  it("fails when the advisory measurement becomes blocking", async () => {
+    // The exact failure this guard exists to prevent: one noisy advisory run
+    // is enough for someone to make it a gate, and then it is not a
+    // measurement any more.
+    const workflow = WORKFLOW.replace(
+      `  perf-gate-canary:
+    needs: matrix
+    runs-on: ubuntu-latest
+    continue-on-error: true`,
+      `  perf-gate-canary:
+    needs: matrix
+    runs-on: ubuntu-latest`,
+    );
+    expect(workflow).toContain("perf-gate-canary:");
+    expect(workflow).not.toContain(
+      `  perf-gate-canary:
+    needs: matrix
+    runs-on: ubuntu-latest
+    continue-on-error: true`,
+    );
+    const dir = tmpProject({ engines: ">=22 <27", nvmrc: "24", workflow });
+    const { code, out } = await runScript(dir, { SCHEDULE_JSON: REAL_SCHEDULE });
+    expect(code).toBe(1);
+    expect(out).toContain("perf-gate-canary lost continue-on-error");
+  }, 15_000);
+
+  it("fails when the advisory measurement is wired into the required check", async () => {
+    const workflow = WORKFLOW.replace(
+      "    needs: [matrix, gates]",
+      "    needs: [matrix, gates, perf-gate-canary]",
+    );
+    const dir = tmpProject({ engines: ">=22 <27", nvmrc: "24", workflow });
+    const { code, out } = await runScript(dir, { SCHEDULE_JSON: REAL_SCHEDULE });
+    expect(code).toBe(1);
+    expect(out).toContain("ci-ok depends on perf-gate-canary");
+  }, 15_000);
+
+  it("fails when the advisory measurement pins a version instead of following the schedule", async () => {
+    // A pinned 26 would keep measuring node 26 after it is promoted and after
+    // 27 becomes the canary — the measurement would silently stop describing
+    // the leg that is about to gate.
+    // Anchored on the job id, because the canary job carries the SAME matrix
+    // expression and a bare string replace would pin the wrong one.
+    const workflow = WORKFLOW.replace(
+      `  perf-gate-canary:
+    needs: matrix
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    if: needs.matrix.outputs.canary != '[]'
+    strategy:
+      matrix:
+        node: \${{ fromJSON(needs.matrix.outputs.canary) }}`,
+      `  perf-gate-canary:
+    needs: matrix
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    if: needs.matrix.outputs.canary != '[]'
+    strategy:
+      matrix:
+        node: [26]`,
+    );
+    const dir = tmpProject({ engines: ">=22 <27", nvmrc: "24", workflow });
+    const { code, out } = await runScript(dir, { SCHEDULE_JSON: REAL_SCHEDULE });
+    expect(code).toBe(1);
+    expect(out).toContain("perf-gate-canary does not consume needs.matrix.outputs.canary");
   }, 15_000);
 
   it("fails when the gates matrix is hardcoded instead of schedule-driven", async () => {

@@ -13,6 +13,41 @@ process. Download zips: the
 ## [Unreleased]
 
 ### Added
+- A CI gate that fails the build when a tracked hot path's parse time grows
+  superlinearly with its input. The three quadratic bugs this parser has
+  already had — the reply closer scan (#113), the streaming re-parse
+  (#114), and five HTML scanners, one of them cubic (#115) — were each
+  invisible to every existing test, because "returns the right answer"
+  and "returns the right answer in linear time" are different properties
+  and only the first was pinned. This pins the second for a tracked
+  corpus: the markdown parser, the demo link audit and gates, the
+  anybase block parser, and the slug helper.
+
+  It measures the time-doubling ratio across a doubling size ladder
+  rather than an absolute millisecond bound, because a runner is several
+  times slower than a laptop and an absolute bound is a coin flip on
+  load — whereas a ratio between two sizes measured back to back on the
+  same box is largely independent of how fast the box is. Linear work
+  reads ~2.0, quadratic work ~4.0, and the threshold is 3.0.
+
+  Three things keep it from being a check that simply passes. It
+  **calibrates itself every run** against a deliberately quadratic and a
+  deliberately linear function, so a box too noisy to tell them apart
+  reports a calibration failure instead of a pass — a gate that cannot
+  demonstrate it catches quadratic growth is not evidence of anything.
+  Every probe **asserts its own input grows only linearly**, after a
+  draft probe that scaled pages *and* links read as a 4.36x regression
+  that did not exist. And every probe **asserts it is still doing work**,
+  so one whose regex quietly stopped matching fails loudly instead of
+  getting faster and guarding nothing.
+
+  Reintroducing the #115 quadratic `forEachTag` was verified to turn the
+  gate red (4.12x and 4.22x readings) before this shipped. It runs as
+  its own CI job on its own runner, because a wall-clock gate sharing a
+  core with the rest of the suite is a coin flip, and coin flips get
+  muted; it is aggregated into the required `ci-ok` check, so no
+  branch-protection change is needed. `npm run check:perf` runs it
+  locally.
 - Assistant replies render as real Markdown. The chat panel used to
   understand exactly one construct — `**bold**` — so every heading,
   bullet list, code fence, link and block quote a model wrote printed as

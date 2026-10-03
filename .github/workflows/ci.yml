@@ -248,13 +248,66 @@ jobs:
 
       - uses: ./.github/actions/gates-steps
 
+  # THE SUPERLINEARITY GATE — fails the build when a tracked hot path's parse
+  # time grows superlinearly with its input (tests/perf/scaling-gate.test.ts).
+  #
+  # It gets its OWN job and its own runner rather than a step in gates-steps,
+  # for one reason: it measures wall-clock time, and a ratio gate reading 2.0
+  # on a contended core is indistinguishable from a 4.0 regression. Running it
+  # beside the rest of the suite would make it a coin flip, and a coin flip gets
+  # muted within a month. A dedicated runner is the whole mitigation.
+  #
+  # Blocking, and reached through `ci-ok` below, so no branch-protection change
+  # is needed — "ci-ok" is already the required check.
+  #
+  # Deliberately NOT continue-on-error and NOT part of the canary: this is a
+  # gate, not a signal, and a perf regression should not need two approvals.
+  perf-gate:
+    name: perf-gate
+    needs: matrix
+    runs-on: ubuntu-latest
+    # The corpus is ~75s here; a loaded or slower runner needs room, and the
+    # gate's own assertions carry the real failure conditions.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Pinned to the OLDEST blocking leg, deliberately: the gate is about
+      # algorithmic growth, and the oldest Node in the support window is the
+      # one users actually run. Measuring on one leg keeps the signal from
+      # depending on which leg happened to be slowest on the day.
+      - name: Resolve the oldest blocking leg
+        id: node
+        run: |
+          legs='${{ needs.matrix.outputs.legs }}'
+          echo "legs: $legs"
+          oldest=$(node -e "console.log(JSON.parse(process.argv[1])[0])" "$legs")
+          echo "measuring on node $oldest"
+          echo "version=$oldest" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ steps.node.outputs.version }}
+          cache: npm
+
+      - name: Install dependencies
+        shell: bash
+        run: npm ci
+
+      # Self-contained config: single fork, no file parallelism, node
+      # environment. See vitest.perf.config.ts for why each of those is load
+      # bearing rather than incidental.
+      - name: Superlinearity gate
+        shell: bash
+        run: npm run check:perf
+
   # Single stable required check. Its result is green ONLY when every
   # computed gates leg passed. Mark THIS in branch protection (Settings →
   # Branches → Branch protection → Required status checks → "ci-ok") —
   # one name that survives promotions/demotions, unlike per-leg names.
   ci-ok:
     name: ci-ok
-    needs: [matrix, gates]
+    needs: [matrix, gates, perf-gate]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -262,8 +315,13 @@ jobs:
         run: |
           echo "legs: ${{ needs.matrix.outputs.legs }}"
           echo "gates result: ${{ needs.gates.result }}"
+          echo "perf-gate result: ${{ needs.perf-gate.result }}"
           if [ "${{ needs.gates.result }}" != "success" ]; then
             echo "✗ at least one blocking leg failed"
+            exit 1
+          fi
+          if [ "${{ needs.perf-gate.result }}" != "success" ]; then
+            echo "✗ the superlinearity gate failed (a tracked hot path grew faster than its input)"
             exit 1
           fi
           echo "✓ all blocking legs passed"

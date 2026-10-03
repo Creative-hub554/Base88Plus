@@ -91,7 +91,7 @@ const LEDGER = new Map<string, string>([
   // ---- counted elsewhere, deterministically ----
   [
     "safeLineCount",
-    "COUNTED: tests/markdown-streaming.test.tsx pins its monotonicity and what it vouches for; a growth gate would be a strictly weaker claim",
+    "COUNTED: tests/markdown-streaming.test.tsx pins its monotonicity, and tests/perf-work-counters.test.ts counts its per-call work exactly AND measures what it costs across a whole stream — which is quadratic, because it reads the whole buffer once per token. The hole was real and it was two files away from the coverage claim",
   ],
   [
     "createStreamingMarkdownParser",

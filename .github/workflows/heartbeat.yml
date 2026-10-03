@@ -12,7 +12,8 @@
 #      is an instant finding (the 60-day-rule tripwire).
 #   2. Cron syntax of every `schedule:` line (parsed from the checkout).
 #   3. Satisfiability - a cron that can never fire is flagged, not skipped.
-#   4. Last due fire vs actual scheduled runs (90 min queue grace, floored by
+#   4. Last due fire vs actual scheduled runs (12h queue grace - measured
+#      against the 8.4h lag GitHub actually shows here, floored by
 #      the workflow's creation date so date-gated chains are NOT_YET_DUE
 #      before their first due date, not falsely dead).
 # The heartbeat audits ITSELF too - its own cron is in the audited set, so a

@@ -13,6 +13,30 @@ process. Download zips: the
 ## [Unreleased]
 
 ### Changed
+- **The schedule heartbeat no longer calls a late-but-live cron dead.**
+
+  GitHub does not start a scheduled run at its due minute — it queues the run
+  at low priority and starts it when a runner frees. The auditor compared the
+  most recent due fire time against the runs that had started and flagged the
+  difference the moment the minute passed, with no grace at all, despite its
+  own header describing a "90 min queue grace" that was never implemented.
+
+  That is wrong by a wide margin in this repo. Both schedules that have ever
+  fired came in around eight and a half hours late: CodeQL due
+  `2026-09-28T09:23Z` started `17:41Z` (8h18m), and the verifier drill due
+  `08:23Z` started `16:48Z` (8h25m). A zero-grace check on an eight-hour lag
+  reports healthy schedules as broken. On 2026-10-03 it filed three DEAD
+  findings — the CI snapshot cron and two Oct 3 verifier slots, 3h42m, 3h12m
+  and 1h52m past due — while every workflow was still `active` and the day's
+  19:17Z backstop had not even come due yet.
+
+  The grace is now `SCHEDULE_GRACE_MS`, set to 12 hours: well clear of the
+  worst lag measured here, with about 42% headroom. A slot that is due but
+  still inside the grace is a note naming the hour it becomes a finding, not
+  an alert. Genuinely skipped crons still fail the audit — 12 hours later.
+  Pinned in `tests/heartbeat-schedule-grace.test.ts` against the measured lags,
+  the exact boundary, and the concrete 2026-10-03 regression.
+
 - The whole-reply render path now has a deterministic work budget: rendering a
   reply of length n costs at most **461 charged units per 132 characters**,
   whatever the length — counted, not timed.

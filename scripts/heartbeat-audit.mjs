@@ -21,7 +21,10 @@
 //                    workflow's created_at (date-gated chains like the Oct 3
 //                    / Oct 28 verifiers are NOT_YET_DUE before their first
 //                    due date - dead-on-arrival would be false). An
-//                    in-progress run counts. MISSED = the silent-skip signal.
+//                    in-progress run counts. MISSED = the silent-skip signal,
+//                    but only after SCHEDULE_GRACE_MS has elapsed since the
+//                    due instant - GitHub starts scheduled runs late, so a
+//                    slot that is merely late is a note, not a finding.
 //
 // This script audits ITSELF too: heartbeat.yml's own cron is in the audited
 // set, so a dead heartbeat is caught by the drill/CI surface instead of
@@ -39,7 +42,8 @@
 //
 // Exit: 0 all healthy (or only NOT_YET_DUE notes), 1 findings that need
 //       attention (posted as one deduped comment on #18 unless dry-run).
-//       Tests import the cron math: node .freebuff/tmp/heartbeat-cron-test.mjs
+//       Tests import the cron math and the grace boundary:
+//       tests/heartbeat-schedule-grace.test.ts
 
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -50,6 +54,24 @@ const API = `https://api.github.com/repos/${REPO}`;
 const ISSUE = 18;
 const FORWARD_DAYS = 1500; // satisfiability horizon: full 4-year leap cycle + slack
 const LOOKBACK_DAYS = 62;  // backward walk horizon: weekly + monthly cadences
+
+// How long a due-but-unfired slot is allowed to stay unfired before the
+// auditor calls it DEAD. GitHub does not start a scheduled run at its due
+// minute: it queues the run at lower priority and starts it when a runner
+// frees. MEASURED in this repo, both schedules that have ever fired came in
+// ~8.4h late - CodeQL due 2026-09-28T09:23Z started 17:41Z (8h18m), Verifier
+// drill due 08:23Z started 16:48Z (8h25m). A grace shorter than that reports
+// live schedules as dead, so this sits well above the worst lag seen: 12h,
+// about 42% headroom over 8h26m. Exported so the boundary is pinned by test
+// instead of drifting with the comment.
+export const SCHEDULE_GRACE_MS = 12 * 60 * 60 * 1000;
+
+// A slot that is due but has not fired is 'grace' until SCHEDULE_GRACE_MS has
+// elapsed since the due instant, and only then 'dead'. Split out of main() so
+// the boundary is unit-testable without touching the Actions API.
+export function overdueState(lastDueMs, nowMs) {
+  return nowMs - lastDueMs >= SCHEDULE_GRACE_MS ? 'dead' : 'grace';
+}
 
 // ---------------------------------------------------------------- cron math
 const MONTH_NAMES = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
@@ -255,11 +277,19 @@ async function main() {
       if (okRun) {
         const state = okRun.status === 'completed' ? okRun.conclusion : 'in progress';
         notes.push(`\`${label}\` cron \`${expr}\` last due ${dueIso} -> run ${okRun.id} ${state} (started ${okRun.run_started_at || okRun.created_at}).`);
+      } else if (overdueState(lastDue, now) === 'grace') {
+        // DUE but not yet DEAD: the slot is still inside the queue grace.
+        // GitHub starts scheduled runs hours after their due minute (8.4h
+        // observed in this repo), so calling it dead the moment the minute
+        // passes produces a false positive on a live schedule. Re-audited on
+        // the next heartbeat, which is what catches a genuinely stalled one.
+        const deadline = new Date(lastDue + SCHEDULE_GRACE_MS).toISOString().replace('T', ' ').slice(0, 16) + 'Z';
+        notes.push(`\`${label}\` cron \`${expr}\` was due ${dueIso} and no scheduled run has started at/after that instant yet, but it is inside the ${SCHEDULE_GRACE_MS / 3600000}h queue grace - re-audit after ${deadline} before treating it as dead.`);
       } else {
         const last = latestScheduled
           ? `latest scheduled attempt: run ${latestScheduled.id} (${latestScheduled.status}/${latestScheduled.conclusion}, started ${latestScheduled.run_started_at || latestScheduled.created_at})`
           : 'no scheduled attempt has EVER been recorded';
-        findings.push(`\`${label}\` cron \`${expr}\` was due at **${dueIso}** but no scheduled run started at/after that instant (${last}). The schedule looks dead: check the workflow state above, the 60-day inactivity rule, and the run list; the date-specific sentinels only cover their own mornings.`);
+        findings.push(`\`${label}\` cron \`${expr}\` was due at **${dueIso}** but no scheduled run started at/after that instant, ${SCHEDULE_GRACE_MS / 3600000}h grace included (${last}). The schedule looks dead: check the workflow state above, the 60-day inactivity rule, and the run list; the date-specific sentinels only cover their own mornings.`);
       }
     }
   }

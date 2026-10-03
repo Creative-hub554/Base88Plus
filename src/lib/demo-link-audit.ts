@@ -297,7 +297,9 @@ export function textBetween(html: string, from: number, to: number): string {
  * pattern is quadratic on an unterminated tag — every `<` makes the engine
  * scan the rest of the file for a `>` that never comes, then retry at the next
  * `<` — and a truncated model response ends mid-tag often enough to matter.
- * See lib/html-tags.ts for why the loop structure is the fix.
+ * See `forEachTagRun` above for why the loop structure is the fix. (This
+ * comment pointed at `lib/html-tags.ts`, a module that was never merged — the
+ * scanner ended up living here.)
  */
 /** The label of the `<a>` whose open tag ends at `tagEnd`, or "" if unterminated. */
 export function anchorLabelAt(html: string, tagEnd: number): string {

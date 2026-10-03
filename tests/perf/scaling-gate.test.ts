@@ -77,13 +77,19 @@ import {
   buildWorkspaceContext,
   extractFiles,
   extractPartialFiles,
+  isEmptyFenceOutput,
+  isSummaryImitation,
   localRefsFromHtml,
+  relativePathList,
+  shouldOfferContinue,
   stripCodeBlocks,
 } from "@/lib/prompt";
 import {
   auditDemoLinks,
+  demoNavIsWired,
   forEachTag,
   forEachTagRun,
+  resolveDemoPath,
   textBetween,
   type DemoAuditFile,
 } from "@/lib/demo-link-audit";
@@ -821,6 +827,161 @@ const PROBES: Probe[] = [
       const out = buildWorkspaceContext(files);
       expect(out).toContain("f0.html");
       expect(out).toContain(`f${n - 1}.html`);
+    },
+  },
+
+  /* ---- the per-turn predicates: one regex over the reply, per generation ---- */
+  {
+    // These run once per generation turn, not per token, so they are not on the
+    // streaming hot path — but each is a regex over the whole narration, which
+    // is exactly the shape that goes quadratic when a pattern backtracks.
+    name: "prompt / isEmptyFenceOutput: narration full of fence markers",
+    make: (n) => {
+      const narration = rep("```\n", n);
+      return () => void isEmptyFenceOutput(narration);
+    },
+    inputSize: (n) => 4 * n,
+    assertLive: (n) => {
+      // Every marker, nothing else: the whole thing is whitespace, so the
+      // empty-fence answer is true however many markers there are.
+      expect(isEmptyFenceOutput(rep("```\n", n))).toBe(true);
+      // And the negative still works — otherwise the `true` above proves nothing.
+      expect(isEmptyFenceOutput("```anybase\nreal content\n```")).toBe(false);
+    },
+  },
+  {
+    // The narration is all fence markers and nothing else, which is the shape
+    // that makes the empty-fence scan the DECIDING branch: with no files, no
+    // fence and no error, `isEmptyFenceOutput` is the only thing that can
+    // answer true. Narration without a marker would short-circuit to false
+    // before the scan mattered, and the probe would time almost nothing —
+    // which is exactly how the first version of this probe was wrong.
+    name: "prompt / shouldOfferContinue: a long narration that is all fence markers",
+    make: (n) => {
+      const narrationText = rep("```\n", n);
+      const attempt = { hadFence: false, files: null, error: null, narrationText };
+      return () => void shouldOfferContinue(attempt);
+    },
+    inputSize: (n) => 4 * n,
+    assertLive: () => {
+      // All markers, nothing else: true, and only via the empty-fence scan.
+      expect(
+        shouldOfferContinue({
+          hadFence: false,
+          files: null,
+          error: null,
+          narrationText: rep("```\n", 20),
+        }),
+      ).toBe(true);
+      // Real prose after the markers leaves content, so the answer is false.
+      expect(
+        shouldOfferContinue({
+          hadFence: false,
+          files: null,
+          error: null,
+          narrationText: "```anybase\nreal content\n```",
+        }),
+      ).toBe(false);
+      // Files present short-circuits it — the common case, and the reason the
+      // hot path usually never reaches the scan at all.
+      expect(
+        shouldOfferContinue({
+          hadFence: true,
+          files: [{ path: "a.html" }],
+          error: null,
+          narrationText: rep("```\n", 20),
+        }),
+      ).toBe(false);
+    },
+  },
+  {
+    name: "prompt / isSummaryImitation: narration full of imitation notes",
+    make: (n) => {
+      const narrationText = rep("[wrote 3 file(s)] ", n);
+      const attempt = { hadFence: false, files: null, narrationText };
+      return () => void isSummaryImitation(attempt);
+    },
+    inputSize: (n) => 17 * n,
+    assertLive: (n) => {
+      const narrationText = rep("[wrote 3 file(s)] ", n);
+      expect(isSummaryImitation({ hadFence: false, files: null, narrationText })).toBe(true);
+      // A real fence means the degenerate retry already covers it.
+      expect(isSummaryImitation({ hadFence: true, files: null, narrationText })).toBe(false);
+    },
+  },
+  {
+    name: "prompt / relativePathList: the workspace listing sent to the model",
+    make: (n) => {
+      const files: ProjectFile[] = [];
+      for (let i = 0; i < n; i++) {
+        files.push({ path: `dir${i}/file${i}.html`, content: "x" });
+      }
+      return () => void relativePathList(files);
+    },
+    inputSize: (n) => n * 30,
+    assertLive: (n) => {
+      const files: ProjectFile[] = [];
+      for (let i = 0; i < n; i++) {
+        files.push({ path: `dir${i}/file${i}.html`, content: "x" });
+      }
+      const out = relativePathList(files);
+      // One line per file, with the real byte count reported.
+      expect(out.split("\n")).toHaveLength(n);
+      expect(out).toContain("dir0/file0.html (1 bytes)");
+    },
+  },
+
+  /* ---- demo nav: a second entry point over the same audit ---- */
+  {
+    // `demoNavIsWired` is what scripts/demo-link-audit.mjs actually calls, so
+    // it is an entry point in its own right rather than something the
+    // auditDemoLinks probes reach — hence a probe of its own.
+    name: "link-audit / demoNavIsWired: many pages of nav to one target",
+    make: (n) => {
+      const files: DemoAuditFile[] = [];
+      for (let i = 0; i < n; i++) {
+        files.push({ path: "index.html", content: linksPage(1, "page.html") });
+        files.push({ path: "page.html", content: "<p>t</p>" });
+      }
+      return () => void demoNavIsWired(files);
+    },
+    inputSize: (n) => n * 90,
+    assertLive: () => {
+      // Both answers proven, because a probe that can only ever return true
+      // guards nothing.
+      expect(
+        demoNavIsWired([
+          { path: "index.html", content: linksPage(1, "page.html") },
+          { path: "page.html", content: "<p>t</p>" },
+        ]),
+      ).toBe(true);
+      expect(
+        demoNavIsWired([
+          { path: "index.html", content: '<a href="#">Page</a>' },
+          { path: "page.html", content: "<p>t</p>" },
+        ]),
+      ).toBe(false);
+    },
+  },
+  {
+    // Called once per link by the audit and by the sanitiser. A path with many
+    // segments exercises the `..`/`.` handling instead of short-circuiting on a
+    // bare filename.
+    name: "link-audit / resolveDemoPath: a deeply segmented target",
+    make: (n) => {
+      const rawPath = Array.from({ length: n }, (_, i) => `seg${i}`).join("/") + "/page.html";
+      return () => void resolveDemoPath("a/b/c/index.html", rawPath);
+    },
+    inputSize: (n) => n * 7 + 20,
+    assertLive: (n) => {
+      const rawPath = Array.from({ length: n }, (_, i) => `seg${i}`).join("/") + "/page.html";
+      const expected = ["a", "b", "c", ...Array.from({ length: n }, (_, i) => `seg${i}`), "page.html"];
+      expect(resolveDemoPath("a/b/c/index.html", rawPath)).toBe(expected.join("/"));
+      // `..` pops, a rooted path ignores the base, and nothing means index.html
+      // — the three shapes that make this a resolver and not a string concat.
+      expect(resolveDemoPath("a/b/index.html", "../c.html")).toBe("a/c.html");
+      expect(resolveDemoPath("a/b/index.html", "/rooted.html")).toBe("rooted.html");
+      expect(resolveDemoPath("index.html", "")).toBe("index.html");
     },
   },
 

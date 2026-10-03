@@ -13,6 +13,38 @@ process. Download zips: the
 ## [Unreleased]
 
 ### Added
+- The superlinearity gate's tracked surface is now itself tracked. A gate is
+  only as good as its list, and a curated list has one failure mode no amount
+  of measurement catches: somebody exports a new function from a hot-path
+  module, it lands on a latency path, and it simply is not in the list. Nothing
+  fails, and the gate keeps reporting green while covering less and less of the
+  surface it claims to cover.
+
+  Every exported function in the pure, input-proportional modules (`markdown`,
+  `prompt`, `demo-link-audit`, `demo-gates`) must now either be probed by the
+  gate or carry a ledger entry saying which of four reasons applies:
+  **COUNTED** (something deterministic already pins the work, which is a
+  stronger claim than a timing ratio), **REACHED** (it sits in the inner loop of
+  something already probed), **NOT INPUT-PROPORTIONAL**, or **UNCALLED**.
+  Stale entries fail too, because a ledger that accumulates dead entries stops
+  being read.
+
+  Running it immediately found six exported hot-path functions with no coverage
+  at all, now probed: `demoNavIsWired` and `resolveDemoPath` (both called per
+  link by the demo audit), `relativePathList`, and the three per-turn
+  predicates `isEmptyFenceOutput`, `shouldOfferContinue` and
+  `isSummaryImitation`.
+
+  It also found two of its own author's mistakes, which is the argument for
+  writing it. The streaming markdown parser is *not* timing-probed, because
+  `tests/markdown-streaming.test.tsx` already pins its work by counting
+  characters parsed — and an earlier draft of this ledger claimed
+  `createStreamingMarkdownParser` was unguarded when it was covered by
+  something stronger. And the first version of the guard was satisfied by an
+  unused *import*, so it went green with six probes missing; it now strips
+  import statements and matches only real usage. All three failure directions
+  were verified by deliberate mutation before this shipped: a new export, a
+  stale ledger entry, and a deleted probe each turn it red.
 - A CI gate that fails the build when a tracked hot path's parse time grows
   superlinearly with its input. The three quadratic bugs this parser has
   already had — the reply closer scan (#113), the streaming re-parse

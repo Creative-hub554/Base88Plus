@@ -13,6 +13,40 @@ process. Download zips: the
 ## [Unreleased]
 
 ### Added
+- The superlinearity gate now reports its full measured envelope on every run,
+  and writes it to the GitHub step summary so each build leaves a durable
+  record of what the instrument actually measured.
+
+  Until now the gate revealed its numbers only inside assertion-failure
+  messages, so a green run recorded nothing. That quietly produced the worst
+  possible state for a measurement instrument: every number behind the shipped
+  configuration — the 3.0 limit, the 1.5x calibration floor, the round count,
+  the sampling budget — was taken on whatever machine the author happened to be
+  on, and CI, which runs this gate on the *oldest* blocking Node leg, never once
+  contributed a measurement. The author was on Node 26 (the canary); the gate
+  ships on Node 22, so its calibration had never been observed on the engine it
+  runs on. The next run produces that missing measurement for free.
+
+  Adding the report immediately paid for itself by exposing a real flake the
+  summary output had been hiding: `prompt / extractFiles` read **3.22** against
+  the 3.00 limit, but a focused measurement over a 64x ladder (100 to 6400
+  files, 5 of 5 trials) put its worst step at **2.40** — clearly linear. The
+  function was fine and the gate was wrong.
+
+  The cause is cross-probe interference, not the probe. `extractFiles` is one
+  of the cheapest in the corpus (~23 microseconds per call at the smallest
+  size), so its ratio is mostly timing jitter, and it runs 22nd of 33 — after
+  earlier probes have allocated enough to change when a GC lands inside its
+  sample. Measured alone in a quiet process it reads a clean ~2.0. Fast probes
+  are the flake-prone ones, and no threshold change fixes that without
+  weakening the gate for every probe at once.
+
+  So an over-limit reading now buys a **re-measurement** rather than a red
+  build. A genuine quadratic is over the limit on every measurement — that is
+  what makes it quadratic — so it still fails, quoting both readings. Noise is
+  by definition not reproducible, which is the property this exploits:
+  reintroducing the #115 quadratic still fails on both readings (4.11 / 4.09),
+  while a healthy run passes at no extra cost.
 - The superlinearity gate now states, as measured fact, exactly what it can
   and cannot see. Driving synthetic probes of known exponent through the
   harness (cost exactly `n^p`) gives the whole envelope in one run:

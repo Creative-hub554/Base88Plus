@@ -37,6 +37,17 @@ process. Download zips: the
   Pinned in `tests/heartbeat-schedule-grace.test.ts` against the measured lags,
   the exact boundary, and the concrete 2026-10-03 regression.
 
+  The grace note then stopped being silent. Inside the grace, a missing run
+  is now classified from the schedule's own history, because a late queue and
+  a dying schedule look identical in a run list. A schedule that has fired
+  before is quoted its own measured lag, so "one missed slot" has something to
+  be measured against; a workflow that has **never** produced a single
+  scheduled run is called out as the signature of the 60-day auto-disable,
+  which is the case worth being patient about and the case worth not trusting.
+  On 2026-10-03 all three late crons landed in the second bucket - none of
+  those workflows has ever fired on a schedule - so the note says that plainly
+  instead of implying a healthy queue.
+
 - The whole-reply render path now has a deterministic work budget: rendering a
   reply of length n costs at most **461 charged units per 132 characters**,
   whatever the length — counted, not timed.

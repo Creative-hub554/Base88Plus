@@ -28,6 +28,7 @@ import {
   textBetween,
 } from "@/lib/demo-link-audit";
 import { formatGateResult, runDemoGates } from "@/lib/demo-gates";
+import { chargeWork } from "@/lib/perf-counter";
 import type { ProjectFile } from "@/lib/types";
 
 /**
@@ -105,6 +106,10 @@ every file matters more than elaborating any one of them.`;
  */
 export function demoLooksComplete(files: ProjectFile[]): boolean {
   const html = files.filter((f) => f.path.endsWith(".html"));
+  // Every file's content is read: the html by a regex test, a stylesheet by
+  // `trim()`. Charged as the documents themselves, which is the honest upper
+  // bound — the characters a regex reads are not observable from JavaScript.
+  chargeWork(files.reduce((n, f) => n + f.content.length, 0));
   if (html.length === 0) return false;
   if (!html.some((f) => /<body[\s>]/i.test(f.content))) return false;
   const styled =
@@ -311,6 +316,12 @@ function stripBrokenPass(html: string, emitted: Set<string>): string {
   let out = "";
   let last = 0;
   let pos = 0;
+  // Characters this pass searched, which is NOT `pos`. The cubic bug this loop
+  // replaced re-read the remainder once per `<`, advancing `pos` by one each
+  // time, so a count built from `pos` would have read perfectly linear while
+  // the work went n-cubed. Charged as the distance each `indexOf` had to look
+  // across, the whole remainder included when it finds nothing.
+  let scanned = 0;
 
   // Walked by hand, one `<` at a time, rather than with the alternation this
   // replaces. That pattern was not merely quadratic but CUBIC on
@@ -334,7 +345,11 @@ function stripBrokenPass(html: string, emitted: Set<string>): string {
   // prior pass" in tests/demo-sanitizer.test.ts.
   while (pos < html.length) {
     const lt = html.indexOf("<", pos);
-    if (lt === -1) break;
+    if (lt === -1) {
+      scanned += html.length - pos;
+      break;
+    }
+    scanned += lt - pos + 1;
     const kind = refKindAt(html, lt);
     if (kind === null) {
       pos = lt + 1;
@@ -342,7 +357,13 @@ function stripBrokenPass(html: string, emitted: Set<string>): string {
     }
     // No `>` ahead means no later `<` can complete a tag either.
     const gt = html.indexOf(">", lt + 1);
-    if (gt === -1) break;
+    if (gt === -1) {
+      scanned += html.length - lt;
+      break;
+    }
+    // The `>` search, plus the bounded window `refValueIn` reads looking for
+    // the attribute: at most the tag itself, and tags do not overlap.
+    scanned += gt - lt;
 
     // The attribute name must appear BEFORE the first `>`, because the old
     // leading `[^>]*` could not cross it. The VALUE may cross it: `[^"'#]+`
@@ -352,10 +373,17 @@ function stripBrokenPass(html: string, emitted: Set<string>): string {
     // The `[^>]*>` that closed every branch of the alternation: the match ran
     // on to the first `>` after the value, and INCLUDED it.
     const afterGt = found === null ? -1 : html.indexOf(">", found.after);
-    if (found === null || afterGt === -1) {
+    if (found === null) {
       pos = lt + 1;
       continue;
     }
+    if (afterGt === -1) {
+      // The search for the tag's own `>` read the remainder and found none.
+      scanned += html.length - found.after;
+      pos = lt + 1;
+      continue;
+    }
+    scanned += afterGt - found.after;
     let end = afterGt + 1;
     if (kind === "script") {
       // The script alternative also claimed the body and closing tag, so the
@@ -363,9 +391,11 @@ function stripBrokenPass(html: string, emitted: Set<string>): string {
       // belongs after THAT, not after the value.
       const close = indexOfCloseScript(html, end);
       if (close === -1) {
+        scanned += html.length - end;
         pos = lt + 1;
         continue;
       }
+      scanned += close - end;
       end = close;
     }
     while (end < html.length && isInlineSpace(html.charCodeAt(end))) end += 1;
@@ -376,6 +406,8 @@ function stripBrokenPass(html: string, emitted: Set<string>): string {
     // because the scan resumes there.
     let start = lt;
     while (start > last && isInlineSpace(html.charCodeAt(start - 1))) start -= 1;
+    // The leading whitespace this match reclaims, and the padding run above it.
+    scanned += lt - start;
 
     const tag = html.slice(start, end);
     out += html.slice(last, start);
@@ -404,6 +436,7 @@ function stripBrokenPass(html: string, emitted: Set<string>): string {
     if (keepAsset(found.value)) out += tag;
   }
   out += html.slice(last);
+  chargeWork(scanned);
   return out;
 }
 
@@ -555,6 +588,9 @@ function relinkPlaceholderNav(html: string, pageIndex: PageSlugIndex): string {
     last = span.end;
   });
   out += html.slice(last);
+  // The rebuild reads the document once, over and above what `forEachTag`,
+  // `indexOfCloseAnchor` and `textBetween` charged for the anchors themselves.
+  chargeWork(html.length);
   return out;
 }
 
@@ -600,6 +636,8 @@ function unescapeAttrQuotes(html: string): string {
     last = span.end;
   });
   out += html.slice(last);
+  // The rebuild reads the document once; the tag walk above charges itself.
+  chargeWork(html.length);
   return out;
 }
 

@@ -13,6 +13,11 @@
     "esModuleInterop": true,
     "module": "esnext",
     "moduleResolution": "bundler",
+    // src/lib/demo-link-audit.ts is imported straight into plain node by
+    // scripts/demo-link-audit.mjs, which does no extension resolution, so its
+    // one import has to name the file. Permitted because this project emits
+    // nothing (`noEmit`), which is the condition TypeScript attaches to it.
+    "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "react-jsx",

@@ -13,40 +13,56 @@ process. Download zips: the
 ## [Unreleased]
 
 ### Changed
-- **The schedule heartbeat no longer calls a late-but-live cron dead.**
+- **The schedule heartbeat now judges each schedule against its own history.**
 
-  GitHub does not start a scheduled run at its due minute — it queues the run
-  at low priority and starts it when a runner frees. The auditor compared the
-  most recent due fire time against the runs that had started and flagged the
-  difference the moment the minute passed, with no grace at all, despite its
-  own header describing a "90 min queue grace" that was never implemented.
+  It used to file a DEAD finding the instant a cron slot's due minute passed.
+  That is wrong here, because GitHub does not start a scheduled run at its due
+  minute - it queues the run at low priority and starts it when a runner
+  frees. Both schedules that have ever fired in this repo came in around eight
+  and a half hours late, so a zero-grace check reports healthy schedules as
+  broken. On 2026-10-03 it filed three findings against workflows that were all
+  `active`, an hour or two after their slots came due.
 
-  That is wrong by a wide margin in this repo. Both schedules that have ever
-  fired came in around eight and a half hours late: CodeQL due
-  `2026-09-28T09:23Z` started `17:41Z` (8h18m), and the verifier drill due
-  `08:23Z` started `16:48Z` (8h25m). A zero-grace check on an eight-hour lag
-  reports healthy schedules as broken. On 2026-10-03 it filed three DEAD
-  findings — the CI snapshot cron and two Oct 3 verifier slots, 3h42m, 3h12m
-  and 1h52m past due — while every workflow was still `active` and the day's
-  19:17Z backstop had not even come due yet.
+  Replacing the missing grace with a constant would have been the quick fix and
+  the wrong one. A single number tuned on the two samples available here would
+  have been applied to every cron in the repo, including ones that fire
+  punctually and deserve minutes of patience rather than hours. It also left
+  two structural holes: the note quoted a schedule's own measured lag while the
+  verdict ignored it, so a message could recommend waiting on a schedule the
+  check had already condemned; and because only the most recent slot was ever
+  examined, a cron that missed every week could never trip any time-based
+  grace, because its silence never outlasted one interval.
 
-  The grace is now `SCHEDULE_GRACE_MS`, set to 12 hours: well clear of the
-  worst lag measured here, with about 42% headroom. A slot that is due but
-  still inside the grace is a note naming the hour it becomes a finding, not
-  an alert. Genuinely skipped crons still fail the audit — 12 hours later.
-  Pinned in `tests/heartbeat-schedule-grace.test.ts` against the measured lags,
-  the exact boundary, and the concrete 2026-10-03 regression.
+  So the verdict is reconstructed from evidence instead of assumed:
 
-  The grace note then stopped being silent. Inside the grace, a missing run
-  is now classified from the schedule's own history, because a late queue and
-  a dying schedule look identical in a run list. A schedule that has fired
-  before is quoted its own measured lag, so "one missed slot" has something to
-  be measured against; a workflow that has **never** produced a single
-  scheduled run is called out as the signature of the 60-day auto-disable,
-  which is the case worth being patient about and the case worth not trusting.
-  On 2026-10-03 all three late crons landed in the second bucket - none of
-  those workflows has ever fired on a schedule - so the note says that plainly
-  instead of implying a healthy queue.
+  - **Every due slot the workflow owed is reconstructed** and matched against
+    the runs that satisfied it, each run claiming the *latest* slot it could
+    possibly satisfy.
+  - **Patience is per schedule** - a multiple of the worst lag that schedule
+    has actually shown, with 1.5x headroom. A punctual schedule gets minutes; a
+    chronically slow one gets hours. The repo-wide floor, which a historyless
+    schedule falls back to, is derived from the slowest anything here has ever
+    run (currently 8h26m x 1.5 = 12.6h) rather than asserted. That figure is
+    what the live audit now reports, which is the clearest evidence the
+    baseline is genuinely learned instead of hardcoded.
+  - **Repeated missed days escalate on their own.** Misses are counted in
+    distinct *days*, not slots: the Oct 3 verifier declares three retry crons
+    for one morning, and three retries are one missed opportunity, not three.
+    Three consecutive silent days is a finding regardless of elapsed time.
+  - **Unproven is not missed.** A slot older than the oldest run the API page
+    reached is excluded from the miss count, so a shallow history cannot
+    manufacture a dead-streak verdict out of slots nobody has evidence about.
+
+  Live on 2026-10-03: `findings=0`, `HEARTBEAT_HEALTHY`, with each late cron
+  reporting how long it has actually been silent and what it is being judged
+  against - either its own worst recorded start or, for the three workflows
+  that have never once fired on a schedule, an honest statement that there is
+  no baseline of its own to judge by.
+
+  Pinned in `tests/heartbeat-schedule-grace.test.ts` against the two real runs
+  this repo has recorded, including the case the old shape could not catch: a
+  schedule whose silence is *shorter* than its own grace, yet dead, because it
+  has missed every slot.
 
 - The whole-reply render path now has a deterministic work budget: rendering a
   reply of length n costs at most **461 charged units per 132 characters**,

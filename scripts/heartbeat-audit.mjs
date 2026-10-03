@@ -59,45 +59,133 @@ const ISSUE = 18;
 const FORWARD_DAYS = 1500; // satisfiability horizon: full 4-year leap cycle + slack
 const LOOKBACK_DAYS = 62;  // backward walk horizon: weekly + monthly cadences
 
-// How long a due-but-unfired slot is allowed to stay unfired before the
-// auditor calls it DEAD. GitHub does not start a scheduled run at its due
-// minute: it queues the run at lower priority and starts it when a runner
-// frees. MEASURED in this repo, both schedules that have ever fired came in
-// ~8.4h late - CodeQL due 2026-09-28T09:23Z started 17:41Z (8h18m), Verifier
-// drill due 08:23Z started 16:48Z (8h25m). A grace shorter than that reports
-// live schedules as dead, so this sits well above the worst lag seen: 12h,
-// about 42% headroom over 8h26m. Exported so the boundary is pinned by test
-// instead of drifting with the comment.
-export const SCHEDULE_GRACE_MS = 12 * 60 * 60 * 1000;
+// ---------------------------------------------------------------------------
+// The health model
+//
+// The auditor's whole job is to answer one question about a missing run: is
+// the queue slow, or is the schedule dying? In a run list those are
+// indistinguishable, so the answer cannot come from a constant. It has to
+// come from the schedule's OWN history, reconstructed from data already on
+// hand. Everything below is that reconstruction, kept pure so it is testable
+// without the Actions API.
 
-// A slot that is due but has not fired is 'grace' until SCHEDULE_GRACE_MS has
-// elapsed since the due instant, and only then 'dead'. Split out of main() so
-// the boundary is unit-testable without touching the Actions API.
-export function overdueState(lastDueMs, nowMs) {
-  return nowMs - lastDueMs >= SCHEDULE_GRACE_MS ? 'dead' : 'grace';
+// Patience is a multiple of the worst lag THIS schedule has actually shown,
+// never a wall-clock guess. 1.5 leaves room for the queue being a little
+// worse than its worst recorded day without waving through a silent schedule.
+export const GRACE_HEADROOM = 1.5;
+
+// Consecutive DISTINCT DAYS on which a slot came due and no scheduled run
+// appeared at all. Days, not slots: the Oct 3 verifier declares three retry
+// crons for one morning, and three retries are one missed opportunity, not
+// three. Past this, elapsed time stops being an argument for waiting.
+export const MAX_PATIENT_MISSED_DAYS = 3;
+
+// Last resort for a repo where NOTHING has ever fired on a schedule. Reached
+// only when every scheduled workflow has an empty run list, which is itself
+// the finding - so this number only has to avoid crying wolf, not be right.
+export const ABSOLUTE_FLOOR_MS = 12 * 60 * 60 * 1000;
+
+// Assign scheduled runs to the slots they satisfied.
+//
+// A workflow's runs are workflow-level, not cron-level: one workflow may
+// declare several crons, and GitHub queues a run per trigger. So the pairing
+// is resolved by claiming: each run, walking ascending, takes the LATEST
+// slot it could possibly satisfy, and no slot is ever claimed twice.
+//
+// Latest, not earliest, is the load-bearing word. A run that starts hours
+// after its slot satisfies THAT slot - claiming the oldest one instead would
+// leave the recent slot looking missed, which is the exact inverse of the
+// truth and would report a healthy schedule as a dead streak.
+// Both inputs ascending.
+export function matchRunsToSlots(slotsMs, runStartsMs) {
+  const slots = [...slotsMs].sort((a, b) => a - b);
+  const starts = [...runStartsMs].sort((a, b) => a - b);
+  const claimed = new Array(slots.length).fill(false);
+  const matched = [];
+  let i = 0;
+  for (const start of starts) {
+    while (i < slots.length && slots[i] <= start) i++;
+    if (i === 0) continue; // predates every slot under audit
+    const idx = i - 1;
+    if (claimed[idx]) continue;
+    claimed[idx] = true;
+    matched.push({ slot: slots[idx], start, lag: start - slots[idx] });
+  }
+  const missed = slots.filter((_, idx) => !claimed[idx]);
+  return { matched, missed };
 }
 
-// Why this exists: a grace makes silence indistinguishable from death unless
-// the note explains the silence. The discriminator is the schedule's OWN
-// history, which costs nothing - it is already in the run list we fetched.
-//   never-fired - no scheduled run has EVER been recorded for this workflow.
-//                  An empty run list is what the 60-day inactivity
-//                  auto-disable looks like from the run side, so patience
-//                  here is the riskiest kind.
-//   has-history - earlier slots did fire. Their lag is the yardstick: if the
-//                  previous slot also started hours late, one missed slot is
-//                  the queue behaving as observed, not a schedule dying.
-// Returns the measured lag of the most recent PRIOR slot against the instant
-// that slot was due, so the note can quote this repo's real lag rather than
-// an assumption. scheduledRuns must be newest-first, as the API returns it.
-export function classifyMiss(scheduledRuns, lastDueMs, prevDueMs) {
-  if (!scheduledRuns || scheduledRuns.length === 0) {
-    return { kind: 'never-fired', priorLagMs: null };
+// Every due instant this workflow owed a run for, walking back from `now`.
+// The union across its crons, never before the workflow existed - a
+// date-gated chain registered yesterday has not missed the slots before it
+// was registered.
+export function slotsBetween(crons, createdMs, nowMs) {
+  const slots = new Set();
+  for (const c of crons) {
+    let cursor = nowMs;
+    for (let guard = 0; guard < 400; guard++) {
+      const t = prevFireBefore(c, cursor);
+      if (t === null || t < createdMs) break;
+      slots.add(t);
+      cursor = t - 1;
+    }
   }
-  const newest = scheduledRuns[0];
-  const started = Date.parse(newest.run_started_at || newest.created_at);
-  const prior = started < lastDueMs && prevDueMs ? started - prevDueMs : null;
-  return { kind: 'has-history', priorLagMs: Number.isNaN(started) ? null : prior };
+  return [...slots].sort((a, b) => a - b);
+}
+
+// What this schedule teaches us about itself: how late it has ever run, and
+// on how many separate days it simply did not run at all.
+export function scheduleBaseline(slotsMs, runStartsMs) {
+  const { matched, missed } = matchRunsToSlots(slotsMs, runStartsMs);
+  // A slot older than the oldest run we fetched is UNPROVEN, not missed: the
+  // run that satisfied it may simply be past the end of the page. Without this
+  // filter a shallow history manufactures a dead-streak verdict out of slots
+  // we never had evidence about.
+  // With an empty run list nothing could have satisfied any slot, so every
+  // one of them is provable - the filter must not swallow them.
+  const earliestRun = runStartsMs.length ? Math.min(...runStartsMs) : -Infinity;
+  const provableMisses = missed.filter((m) => m >= earliestRun);
+  const lags = matched.map((m) => m.lag);
+  const sorted = [...lags].sort((a, b) => a - b);
+  return {
+    worstLagMs: lags.length ? sorted[sorted.length - 1] : null,
+    medianLagMs: lags.length ? sorted[Math.floor(lags.length / 2)] : null,
+    matchedCount: matched.length,
+    missedDays: new Set(provableMisses.map((m) => new Date(m).toISOString().slice(0, 10))).size,
+    slotCount: slotsMs.length,
+  };
+}
+
+// How long to wait before calling this schedule silent. A schedule with its
+// own history is judged by its own worst day; only a schedule with NO history
+// falls back to the repo-wide floor, because then that floor is the only
+// evidence available about this runner queue.
+export function deriveGrace(worstLagMs, floorMs) {
+  if (worstLagMs === null || worstLagMs === undefined) return floorMs;
+  return Math.round(worstLagMs * GRACE_HEADROOM);
+}
+
+// Grade the most recent due slot against its workflow's learned baseline.
+// Returns the verdict AND the numbers behind it, so the note can show its
+// work rather than assert a conclusion.
+//
+//   within-history    silent, but no longer than this schedule has ever been
+//   beyond-any-history  silent for longer than anything in its own record,
+//                     still inside the headroom above that
+//   no-baseline       nothing to judge against; judged on the repo floor
+//   dead              past its grace
+//   dead-streak       too many consecutive days with no run at all - fires
+//                     regardless of elapsed time, because a cron that misses
+//                     every week never outruns any time-based grace
+export function gradeSlot({ baseline, lastDueMs, nowMs, floorMs }) {
+  const graceMs = deriveGrace(baseline.worstLagMs, floorMs);
+  const elapsed = nowMs - lastDueMs;
+  const shared = { graceMs, elapsed, missDays: baseline.missedDays, baseline };
+  if (baseline.missedDays >= MAX_PATIENT_MISSED_DAYS) return { verdict: 'dead-streak', ...shared };
+  if (elapsed >= graceMs) return { verdict: 'dead', ...shared };
+  if (baseline.worstLagMs === null) return { verdict: 'no-baseline', ...shared };
+  if (elapsed > baseline.worstLagMs) return { verdict: 'beyond-any-history', ...shared };
+  return { verdict: 'within-history', ...shared };
 }
 
 // Human-readable lag for the note. Minutes are the useful unit here: this
@@ -264,6 +352,9 @@ async function main() {
     return r.json();
   };
 
+  const rows = [];
+  let globalWorstLagMs = null;
+
   const wfs = await api('/actions/workflows?per_page=100');
   // Only real repo workflows: exclude GitHub-managed synthetic entries like
   // "Dependabot Updates" (path dynamic/dependabot/... - no file to audit).
@@ -284,55 +375,93 @@ async function main() {
     const crons = extractCrons(text);
     if (crons.length === 0) continue; // event-driven (push/PR/workflow_run) - not our business
 
-    const runs = await api(`/actions/workflows/${wf.path.split('/').pop()}/runs?event=schedule&per_page=20`);
-    const latestScheduled = runs.workflow_runs[0] || null;
+    // per_page=100, not 20. A baseline learned from two samples is the very
+    // guess this audit was rebuilt to stop making.
+    const runs = await api(`/actions/workflows/${wf.path.split('/').pop()}/runs?event=schedule&per_page=100`);
+    const runObjs = runs.workflow_runs;
+    const runStarts = runObjs.map((r) => Date.parse(r.run_started_at || r.created_at)).filter((t) => !Number.isNaN(t));
     const createdMs = Date.parse(wf.created_at);
 
+    const parsed = [];
     for (const { expr, line } of crons) {
       let c;
       try { c = parseCron(expr); } catch (e) {
         findings.push(`\`${label}\` line ${line}: cron \`${expr}\` is not parseable (${e.message}). Fix the expression.`);
         continue;
       }
+      parsed.push({ expr, line, c });
+    }
+    if (parsed.length === 0) continue;
+
+    // ---- PASS 1: learn. Every due slot this workflow owed is reconstructed
+    // and matched against the runs that satisfied it. Nothing is judged yet:
+    // the patience floor is repo-wide, so verdicts must wait until every
+    // workflow has been measured.
+    const slotsMs = slotsBetween(parsed.map((p) => p.c), createdMs, now);
+    const baseline = scheduleBaseline(slotsMs, runStarts);
+    if (baseline.worstLagMs !== null) {
+      globalWorstLagMs = globalWorstLagMs === null ? baseline.worstLagMs : Math.max(globalWorstLagMs, baseline.worstLagMs);
+    }
+
+    for (const { expr, c } of parsed) {
       const next = nextFireAfter(c, now);
       if (next === null) {
-        findings.push(`\`${label}\` line ${line}: cron \`${expr}\` has NO fire time in the next ${FORWARD_DAYS} days - it can never run (unsatisfiable expression). Fix or remove it.`);
+        findings.push(`\`${label}\` cron \`${expr}\` has NO fire time in the next ${FORWARD_DAYS} days - it can never run (unsatisfiable expression). Fix or remove it.`);
         continue;
       }
       const lastDue = prevFireBefore(c, now);
       if (lastDue === null || lastDue < createdMs) {
-        const n = new Date(next).toISOString().replace('T', ' ').slice(0, 16) + 'Z';
-        notes.push(`\`${label}\` cron \`${expr}\` has never been due yet (next fire ~${n}; workflow created ${wf.created_at.slice(0, 10)}) - nothing to audit until then.`);
+        const nn = new Date(next).toISOString().replace('T', ' ').slice(0, 16) + 'Z';
+        notes.push(`\`${label}\` cron \`${expr}\` has never been due yet (next fire ~${nn}; workflow created ${wf.created_at.slice(0, 10)}) - nothing to audit until then.`);
         continue;
       }
-      const dueIso = new Date(lastDue).toISOString();
-      // Any scheduled attempt started at/after the due instant counts:
-      // completed (any conclusion - a RED run is still evidence the schedule
-      // fired) or in progress (cron-day mornings). Runs from the previous
-      // slot started before lastDue and are excluded by the comparison.
-      const okRun = runs.workflow_runs.find((r) => Date.parse(r.run_started_at || r.created_at) >= lastDue);
-      if (okRun) {
-        const state = okRun.status === 'completed' ? okRun.conclusion : 'in progress';
-        notes.push(`\`${label}\` cron \`${expr}\` last due ${dueIso} -> run ${okRun.id} ${state} (started ${okRun.run_started_at || okRun.created_at}).`);
-      } else if (overdueState(lastDue, now) === 'grace') {
-        // DUE but not yet DEAD: the slot is still inside the queue grace.
-        // GitHub starts scheduled runs hours after their due minute (8.4h
-        // observed in this repo), so calling it dead the moment the minute
-        // passes produces a false positive on a live schedule. Re-audited on
-        // the next heartbeat, which is what catches a genuinely stalled one.
-        const deadline = new Date(lastDue + SCHEDULE_GRACE_MS).toISOString().replace('T', ' ').slice(0, 16) + 'Z';
-        const miss = classifyMiss(runs.workflow_runs, lastDue, prevFireBefore(c, lastDue - 1));
-        const why = miss.kind === 'never-fired'
-          ? `this workflow has NEVER produced a scheduled run, which is exactly how the 60-day inactivity auto-disable looks from the run side - so if the list is still empty at ${deadline}, read it as a dead schedule rather than a queued one`
-          : `its schedule has fired before (the previous slot started ${formatLag(miss.priorLagMs)} late, in line with this repo's measured queue lag), so one missed slot reads as the queue rather than as death`;
-        notes.push(`\`${label}\` cron \`${expr}\` was due ${dueIso} and no scheduled run has started at/after that instant yet, but it is inside the ${SCHEDULE_GRACE_MS / 3600000}h queue grace - ${why}. Re-audit after ${deadline}.`);
-      } else {
-        const last = latestScheduled
-          ? `latest scheduled attempt: run ${latestScheduled.id} (${latestScheduled.status}/${latestScheduled.conclusion}, started ${latestScheduled.run_started_at || latestScheduled.created_at})`
-          : 'no scheduled attempt has EVER been recorded';
-        findings.push(`\`${label}\` cron \`${expr}\` was due at **${dueIso}** but no scheduled run started at/after that instant, ${SCHEDULE_GRACE_MS / 3600000}h grace included (${last}). The schedule looks dead: check the workflow state above, the 60-day inactivity rule, and the run list; the date-specific sentinels only cover their own mornings.`);
-      }
+      rows.push({ label, expr, lastDue, baseline, runObjs });
     }
+  }
+
+  // The floor a historyless schedule is judged against: the slowest anything
+  // in this repo has ever actually run, with headroom. Derived rather than
+  // assumed - it reproduces the 12h that used to be hardcoded (8h26m x 1.5)
+  // without pretending one observation speaks for every cron.
+  const floorMs = globalWorstLagMs === null
+    ? ABSOLUTE_FLOOR_MS
+    : Math.max(Math.round(globalWorstLagMs * GRACE_HEADROOM), ABSOLUTE_FLOOR_MS);
+
+  // ---- PASS 2: judge.
+  for (const { label, expr, lastDue, baseline, runObjs } of rows) {
+    const dueIso = new Date(lastDue).toISOString();
+    // Any scheduled attempt started at/after the due instant counts:
+    // completed (any conclusion - a RED run is still evidence the schedule
+    // fired) or in progress (cron-day mornings). Runs from the previous slot
+    // started before lastDue and are excluded by the comparison.
+    const okRun = runObjs.find((r) => Date.parse(r.run_started_at || r.created_at) >= lastDue);
+    if (okRun) {
+      const state = okRun.status === 'completed' ? okRun.conclusion : 'in progress';
+      notes.push(`\`${label}\` cron \`${expr}\` last due ${dueIso} -> run ${okRun.id} ${state} (started ${okRun.run_started_at || okRun.created_at}).`);
+      continue;
+    }
+
+    const g = gradeSlot({ baseline, lastDueMs: lastDue, nowMs: now, floorMs });
+    const deadline = new Date(lastDue + g.graceMs).toISOString().replace('T', ' ').slice(0, 16) + 'Z';
+    const graceH = Math.round(g.graceMs / 360000) / 10;
+    const evidence = baseline.worstLagMs === null
+      ? `this workflow has never produced a scheduled run, so there is no baseline of its own to judge against`
+      : `its own record shows a worst start ${formatLag(baseline.worstLagMs)} after a slot came due (median ${formatLag(baseline.medianLagMs)}), so it gets ${graceH}h of patience rather than this repo's floor`;
+
+    if (g.verdict === 'within-history' || g.verdict === 'beyond-any-history' || g.verdict === 'no-baseline') {
+      const how = g.verdict === 'within-history'
+        ? `no run yet, but that is still no worse than its own worst start`
+        : g.verdict === 'beyond-any-history'
+          ? `no run yet and now past every start in its own record, though still inside the ${graceH}h headroom above that`
+          : `judged against the repo floor of ${graceH}h, derived from the slowest any schedule here has ever run, because it has no history of its own`;
+      notes.push(`\`${label}\` cron \`${expr}\` was due ${dueIso} and no scheduled run has started at/after that instant yet - ${how}. Silent for ${formatLag(g.elapsed)}; re-audit after ${deadline}.`);
+      continue;
+    }
+
+    const streak = g.verdict === 'dead-streak'
+      ? ` It has now missed ${g.missDays} consecutive days with no run at all, which no amount of elapsed time excuses.`
+      : ` Silent for ${formatLag(g.elapsed)}, past the ${graceH}h patience derived from ${baseline.worstLagMs === null ? 'the repo floor' : 'its own worst start'}.`;
+    findings.push(`\`${label}\` cron \`${expr}\` was due at **${dueIso}** but no scheduled run started at/after that instant.${streak} ${evidence}. The schedule looks dead: check the workflow state above, the 60-day inactivity rule, and the run list; the date-specific sentinels only cover their own mornings.`);
   }
 
   if (scheduled.length === 0) findings.push('No workflows returned by the Actions API - the query failed or every workflow is gone.');

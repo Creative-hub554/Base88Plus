@@ -513,7 +513,7 @@ const COUNTED: Counted[] = [
     // The audit, on the shape that once hid a quadratic: a page whose tail is
     // one unterminated anchor after another. No exact count here, because the
     // four real links before it are a fixed cost the ladder cannot divide out.
-    name: "link-audit / auditDemoLinks: real links then unterminated tags",
+    name: "link-audit / auditDemoLinks: real links then unterminated tags (the #115 shape)",
     build: (n) => {
       const content = '<a href="x">y</a>'.repeat(4) + "<div".repeat(n);
       return () => void auditDemoLinks([{ path: "index.html", content }]);
@@ -525,7 +525,7 @@ const COUNTED: Counted[] = [
     // Many pages, many links each. The per-char figure drifts gently UPWARD
     // across the ladder — the page stems in the filenames gain digits — which
     // is why the drift pin exists next to the ratio pin.
-    name: "link-audit / auditDemoLinks: many pages x many links",
+    name: "link-audit / auditDemoLinks: many pages x many links (the #115 shape)",
     build: (n) => {
       const files: DemoAuditFile[] = [];
       for (let i = 0; i < n; i++) {
@@ -567,7 +567,7 @@ const COUNTED: Counted[] = [
   {
     // The #115 shape, kept with a terminator so there is real per-tag work to
     // do: the trailing `<div` survives as text because no `>` follows it.
-    name: "gates / visibleText: tags then an unterminated one",
+    name: "gates / visibleText: tags then an unterminated one (the #115 shape)",
     build: (n) => {
       const html = "<p>hello world</p>".repeat(n) + "<div";
       return () => void visibleText(html);

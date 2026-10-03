@@ -26,6 +26,14 @@
  *      would block merges; without the guard it would fail on an empty set.
  *   6. The ci-ok aggregate job exists and depends on gates — the single
  *      stable required check that survives promotions/demotions.
+ *   7. When there is a canary candidate, the workflow ALSO runs the
+ *      superlinearity gate on it, non-blocking, as a measurement — because a
+ *      canary auto-promotes on its LTS date, and promotion day should not be
+ *      the first day that engine has ever been measured by the instrument
+ *      about to gate on it. This one is also pinned on what it must NOT be:
+ *      present in ci-ok's needs. A measurement in the required check's
+ *      dependency graph is a measurement with a vote, and the first person
+ *      annoyed by it will make it blocking.
  *
  * Exit 0 = contract holds; exit 1 = drift. Run via `npm run check:node`.
  * Checks the tree you run it FROM (npm scripts execute at the package
@@ -144,6 +152,43 @@ async function main() {
       }
     }
 
+    // The advisory measurement on the leg that is about to be promoted.
+    const advisory = jobs["perf-gate-canary"];
+    if (canary !== null) {
+      if (!advisory) {
+        failures.push(
+          `schedule has a canary candidate (node ${canary}) but ${WF_REL} has no ` +
+            `perf-gate-canary job — the engine would reach LTS, and the ` +
+            `superlinearity gate would start gating on it having never run on it`,
+        );
+      } else {
+        const am =
+          advisory.strategy && advisory.strategy.matrix && advisory.strategy.matrix.node;
+        check(
+          typeof am === "string" && am.includes("needs.matrix.outputs.canary"),
+          "perf-gate-canary runs on the computed canary, not a pinned version",
+          "perf-gate-canary does not consume needs.matrix.outputs.canary — it would measure a version the schedule no longer calls a canary",
+        );
+        check(
+          advisory["continue-on-error"] === true,
+          "perf-gate-canary is advisory (continue-on-error: true)",
+          "perf-gate-canary lost continue-on-error — a measurement started blocking merges, and the first engineer to be annoyed by a noisy advisory leg will make it blocking for real",
+        );
+        check(
+          typeof advisory.if === "string" && advisory.if.includes("canary"),
+          "perf-gate-canary skips itself when there is no canary",
+          "perf-gate-canary lost its if: guard — it would run on an empty matrix once every candidate is promoted",
+        );
+        check(
+          /npm run check:perf/.test(
+            JSON.stringify(advisory.steps || []),
+          ),
+          "perf-gate-canary runs the superlinearity gate",
+          "perf-gate-canary does not run check:perf — the canary measurement is measuring something else",
+        );
+      }
+    }
+
     const ciok = jobs["ci-ok"];
     check(
       Boolean(ciok),
@@ -155,6 +200,11 @@ async function main() {
         Array.isArray(ciok.needs) && ciok.needs.includes("gates"),
         "ci-ok depends on gates",
         "ci-ok does not depend on gates — the required check would not reflect the blocking legs",
+      );
+      check(
+        !Array.isArray(ciok.needs) || !ciok.needs.includes("perf-gate-canary"),
+        "ci-ok does NOT wait on the advisory canary measurement",
+        "ci-ok depends on perf-gate-canary — the advisory measurement now holds up merges, which is the opposite of what it is for",
       );
     }
   }

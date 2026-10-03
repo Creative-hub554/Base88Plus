@@ -301,8 +301,91 @@ jobs:
         shell: bash
         run: npm run check:perf
 
+  # THE SAME GATE, MEASURED ON THE CANARY LEG BEFORE THAT LEG IS PROMOTED.
+  #
+  # The matrix is computed from the release schedule, so node 26 becomes a
+  # BLOCKING gate on 2026-10-28 with no workflow edit. When that happens the
+  # superlinearity gate starts running on 26 that same day — and its every
+  # shipped number (the 3.00 limit, the calibration floor, the round count,
+  # the sampling budget) was taken on the leg it runs on today. Promotion day
+  # would therefore be the first day 26 had ever been measured by the
+  # instrument that is about to gate on it.
+  #
+  # #119 already went the other way round: the gate was calibrated on the
+  # author's Node 26 laptop and only ever ran on Node 22 in CI, so the very
+  # first always-report run produced the measurement that had been missing
+  # for the entire life of the gate. This closes the remaining direction —
+  # the engine arrives already measured.
+  #
+  # ITS OWN RUNNER, like the blocking perf-gate. It measures wall-clock time,
+  # and folding it into the canary job would put it beside the whole suite on
+  # a contended core, which is the exact condition the dedicated runner exists
+  # to avoid. Reusing the canary job would have been cheaper in wall-clock
+  # minutes and worthless as a measurement.
+  #
+  # NON-BLOCKING, deliberately and permanently. This is a measurement, not a
+  # gate: its purpose is to be READ on promotion day, and a check that can
+  # turn merges red is a check that gets muted, at which point the
+  # measurement nobody reads is worse than no measurement. So
+  # continue-on-error, no `needs` entry in ci-ok, and a contract check
+  # (scripts/check-node-contract.js) that fails if any of those three
+  # properties is lost.
+  #
+  # Its OUTPUT is the point, not its verdict: the gate writes its full
+  # measured envelope to the step summary, and the run is tee'd to a file and
+  # archived as an artifact, so the node-26 envelope outlives the log.
+  perf-gate-canary:
+    name: perf-gate-canary
+    needs: matrix
+    runs-on: ubuntu-latest
+    # Same budget as the blocking leg. An advisory measurement that gets cut
+    # off produces no envelope, which is worse than a slow one.
+    timeout-minutes: 15
+    continue-on-error: true
+    # Nothing to measure once every candidate has been promoted.
+    if: needs.matrix.outputs.canary != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ${{ fromJSON(needs.matrix.outputs.canary) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        shell: bash
+        run: npm ci
+
+      # pipefail, because `| tee` would otherwise report the exit status of
+      # tee and a failed measurement would read as a successful one — which
+      # is precisely the failure this job exists to detect.
+      - name: Superlinearity gate (advisory, node ${{ matrix.node }})
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run check:perf 2>&1 | tee "perf-envelope-node${{ matrix.node }}.txt"
+
+      # `always()`: a FAILED measurement is the one most worth keeping.
+      - name: Archive the measured envelope
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: perf-envelope-node${{ matrix.node }}-${{ github.run_id }}
+          path: perf-envelope-node${{ matrix.node }}.txt
+          if-no-files-found: error
+
   # Single stable required check. Its result is green ONLY when every
-  # computed gates leg passed. Mark THIS in branch protection (Settings →
+  # computed gates leg passed.
+  #
+  # It deliberately does NOT need perf-gate-canary. That job is a measurement,
+  # and a required check that waits on a measurement gives the measurement a
+  # vote: the next person to be annoyed by a flaky advisory leg will make it
+  # blocking, and the day the gate first runs on a newly promoted engine is
+  # the worst possible day to have it holding up merges. Mark THIS in branch protection (Settings →
   # Branches → Branch protection → Required status checks → "ci-ok") —
   # one name that survives promotions/demotions, unlike per-leg names.
   ci-ok:

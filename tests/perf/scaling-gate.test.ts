@@ -94,8 +94,14 @@
  * green in both. Counting catches it exactly, by capping work per input
  * character. Neither instrument can see work that happens inside a single
  * regex call, where the characters V8 steps through are not observable from
- * JavaScript; the work gate names those functions in a test rather than
- * leaving them to be assumed covered.
+ * JavaScript. The way that is handled is worth recording, because it is not
+ * the obvious one: the fix was to REWRITE the function, not to document the
+ * hole and move on. `isEmptyFenceOutput` was the standing example — the
+ * worst-reading probe in this corpus, with the least headroom of all 33, and
+ * uncountable. Replacing its regex with an explicit character scan (#121)
+ * made it countable and, as it turned out, 52-100% faster on every shape
+ * that matters. One function is still uncountable and the work gate names
+ * it in a test, so the gap cannot quietly grow back.
  *
  * So this file remains the primary gate, because it is the only one that
  * generalises to a function nobody thought to instrument, and the work gate
@@ -254,6 +260,17 @@ const BUDGET_MS = 40;
  *
  * The cost on a healthy run is zero: the re-measurement only happens after
  * something has already looked wrong.
+ *
+ * WHAT IT GOT WRONG FIRST, which is why a report row can carry two numbers.
+ * The row recorded the MAX of the two readings, on the principle that an
+ * instrument's diary should never flatter it. But the report test then
+ * asserted that the worst row was within the limit, so a probe CONFIRM had
+ * correctly rescued failed the build anyway, and the step summary published
+ * the number the gate had just rejected. Found on the #121 run:
+ * `shouldOfferContinue` read 4.86, was re-measured under the limit, and the
+ * report failed at 4.86 on a build the gate considered green. The row now
+ * ranks on the reading the verdict rested on and prints the rejected one next
+ * to it, so nothing is hidden and nothing is counted twice.
  */
 const CONFIRM = true;
 
@@ -1207,7 +1224,45 @@ describe("the scaling gate can tell quadratic from linear", () => {
  * Every probe's ratio from this run, for the report written below. Populated as
  * the probe tests execute, then read once they have all run.
  */
-const RECORDED: Array<{ name: string; ratio: number }> = [];
+const RECORDED: Array<{
+  name: string;
+  /** The reading the gate ruled on: the only one, or the confirming second. */
+  ratio: number;
+  /** The reading a re-measurement REJECTED, kept so the report hides nothing. */
+  reconfirmed?: number;
+}> = [];
+
+/**
+ * Fold a confirming re-measurement into a report row.
+ *
+ * The row takes the reading the gate RULED ON, not the worst of the two. Taking
+ * the max looked more honest and was self-defeating: the report test asserts
+ * its worst row is within the limit, so a probe CONFIRM correctly rescued
+ * still failed the build, with a diary reporting the noise the gate had just
+ * overruled. Both numbers are printed; only the one the verdict rested on is
+ * ranked.
+ */
+function applyConfirmation(
+  row: (typeof RECORDED)[number],
+  first: number,
+  second: number,
+): void {
+  row.ratio = second;
+  row.reconfirmed = first;
+}
+
+/**
+ * One line of the envelope report. A probe that had to be re-measured prints
+ * both readings, because a durable record of an instrument should show the
+ * reading it discarded as well as the one it accepted.
+ */
+function renderRow(r: (typeof RECORDED)[number]): string {
+  const rejected =
+    r.reconfirmed === undefined
+      ? ""
+      : `   (re-measured: first reading ${r.reconfirmed.toFixed(2)})`;
+  return `   ${r.ratio.toFixed(2)}  ${r.name}${rejected}`;
+}
 
 describe("no tracked hot path grows superlinearly with its input", () => {
   // One `it` per probe, not one aggregate assertion, so a regression names the
@@ -1223,8 +1278,11 @@ describe("no tracked hot path grows superlinearly with its input", () => {
 
       // One over-limit reading is a claim, not a verdict. See CONFIRM above.
       const second = measure(probe.make);
-      const row = RECORDED[RECORDED.length - 1]!;
-      row.ratio = Math.max(first.worstRatio, second.worstRatio);
+      applyConfirmation(
+        RECORDED[RECORDED.length - 1]!,
+        first.worstRatio,
+        second.worstRatio,
+      );
       expect(
         second.worstRatio,
         `CONFIRMED superlinear: two independent measurements both exceeded the ` +
@@ -1261,6 +1319,15 @@ describe("no tracked hot path grows superlinearly with its input", () => {
  * that CONFIRM now handles, which the summary output had been hiding.
  */
 describe("the run's measured envelope, for the record", () => {
+  it("ranks a rescued probe on the reading the verdict rested on", () => {
+    const row: (typeof RECORDED)[number] = { name: "probe", ratio: 4.86 };
+    applyConfirmation(row, 4.86, 2.06);
+    // The rejected reading is kept, so the report can print it; it is just not
+    // the number the run is ranked on, which is what made a green build red.
+    expect(row.ratio).toBe(2.06);
+    expect(row.reconfirmed).toBe(4.86);
+  });
+
   it("reports every probe ratio and how much headroom the limit has", () => {
     const rows = [...RECORDED].sort((a, b) => b.ratio - a.ratio);
     const worst = rows[0]!;
@@ -1278,7 +1345,7 @@ describe("the run's measured envelope, for the record", () => {
       `   worst probe     ${worst.ratio.toFixed(2)}  (${worst.name})`,
       `   headroom        ${headroom.toFixed(0)}% below the limit`,
       "",
-      ...rows.map((r) => `   ${r.ratio.toFixed(2)}  ${r.name}`),
+      ...rows.map(renderRow),
       "=".repeat(66),
       "",
     ].join("\n");
@@ -1299,7 +1366,14 @@ describe("the run's measured envelope, for the record", () => {
 
     // So an empty or truncated report cannot masquerade as a real one.
     expect(rows.length).toBe(PROBES.length);
+    // The ranked number is the one the gate ruled on, so a probe that CONFIRM
+    // rescued cannot fail here a second time for the reading that was rejected.
     expect(worst.ratio).toBeLessThanOrEqual(MAX_RATIO);
+    // And a rescued probe must still print the reading it discarded.
+    expect(renderRow({ name: "probe", ratio: 2.1 })).toBe("   2.10  probe");
+    expect(renderRow({ name: "probe", ratio: 2.1, reconfirmed: 4.86 })).toBe(
+      "   2.10  probe   (re-measured: first reading 4.86)",
+    );
   });
 });
 

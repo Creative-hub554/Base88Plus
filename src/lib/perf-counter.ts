@@ -38,10 +38,18 @@
  * loop in the renderer, which is the one cost this instrument must not have.
  *
  * WHAT IS NOT COUNTED, stated plainly rather than left to be discovered:
- *  - Work that happens inside a single regex call. `isEmptyFenceOutput` is one
- *    `.replace()`; the characters V8 steps through are not observable from
- *    JavaScript. Those functions keep the timing probe, and no amount of
- *    counting here will ever cover them.
+ *  - Work that happens inside a single regex call. The characters V8 steps
+ *    through are not observable from JavaScript, and no charge site can see
+ *    them. `isEmptyFenceOutput` was the standing example for a while — it
+ *    was also the worst-reading probe in the timing gate, with the least
+ *    headroom of the whole corpus, so the two facts were not a
+ *    coincidence. It was rewritten as an explicit character scan in #121,
+ *    which closed the gap AND removed two full-length copies of the reply
+ *    from a per-turn path. When this instrument wants a rewrite the code
+ *    can afford, rewrite the code; the counting is not the only reason,
+ *    and the diff turned out to be worth having on its own. One function is
+ *    still unreachable — `isSummaryImitation`, one anchored regex `test()` —
+ *    and tests/perf-work-counters.test.ts names it in a test.
  *  - Anything not charged by a call site. The counter is only as complete as
  *    the charge sites, and a charge site inside an early return is a hole.
  *

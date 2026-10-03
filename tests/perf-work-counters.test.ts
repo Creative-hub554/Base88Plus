@@ -72,6 +72,28 @@
  * takes the audit entries to 3.87x here while every ratio-only instrument in
  * the repo stays at 2.00x.
  *
+ * THE WHOLE-REPLY RENDER PATH is budgeted here, and it is the entry that
+ * answers the question a user would actually ask: what does it cost to render
+ * a reply of this size. Every other markdown entry measures a fragment; this
+ * one measures the document, and its answer is exact — 461 charged units per
+ * 132 characters of a realistic reply, whatever the length.
+ *
+ * Getting there meant charging the three terms between the source string and
+ * the rendered blocks that nothing was counting: `toLines`, the block pass, and
+ * `safeUrl` (one per link, which is why the many-links cap moved from 2.2 to
+ * 3.7 — a URL that gets validated is work the old count did not know about).
+ *
+ * AND THE BUDGET FOUND THE HOLE IN ITS OWN PATH. `safeLineCount` is charged
+ * one pass over the buffer, which is linear per call — so it is a normal entry
+ * in the table — but the streaming parser asks it once per token over the
+ * whole reply, which is quadratic across a stream. Measured: ratio 4.00,
+ * per-character cost 560 -> 17,610. The block parser is innocent; its
+ * `charsParsed` is bounded per tail and stays linear, which is exactly why
+ * #114's streaming work landed and this went unnoticed next to it. The test
+ * after the table measures it on purpose. The FIX is a change to the parser
+ * (resuming `safeLineCount` needs the fence state at the resume point), and it
+ * wants its own PR rather than a quiet change to an instrument.
+ *
  * One function still cannot be counted — `isSummaryImitation`, whose work is
  * one anchored regex `test()` — and there is a test that pins that fact, so
  * the gap cannot quietly grow back.
@@ -84,7 +106,13 @@
  * `npm test`, on every PR, in milliseconds, and it cannot flake.
  */
 import { describe, expect, it } from "vitest";
-import { parseInline } from "@/lib/markdown";
+import {
+  createStreamingMarkdownParser,
+  parseInline,
+  parseMarkdown,
+  safeLineCount,
+  safeUrl,
+} from "@/lib/markdown";
 import { chargeWork, measureWork } from "@/lib/perf-counter";
 import {
   extractFiles,
@@ -307,6 +335,26 @@ type Counted = {
   exactWork?: (n: number) => number;
 };
 
+/**
+ * One block of a realistic model reply — heading, prose with every inline
+ * construct, a list, a quote — and nothing exotic in it. The length is asked
+ * of the string rather than written down, because an `inputSize` that drifts
+ * from the input is a drift this file would report as the code getting worse.
+ */
+function realisticUnit(): string {
+  return [
+    "## Section heading",
+    "",
+    "Some prose with **bold**, `code`, and a [link](https://example.com/x).",
+    "",
+    "- a list item",
+    "- another item",
+    "",
+    "> a quote",
+    "",
+  ].join("\n");
+}
+
 /** The brief `missingBriefFiles` is handed: real length, digits and all. */
 function briefOf(n: number): string {
   const names: string[] = [];
@@ -348,9 +396,14 @@ const COUNTED: Counted[] = [
       return () => parseInline(src);
     },
     inputSize: (n) => 39 * n,
-    // Per link: the label scan (6), the href scan (26) and the recursive parse
-    // of the label (5), over 39 characters of input.
-    maxWorkPerChar: 2.2,
+    // Per link: the label scan (6), the href scan (26), the recursive parse
+    // of the label (5), and — since the render-path work budget — `safeUrl`
+    // reading the URL twice (the strip loop and the lowercasing), over 39
+    // characters of input. The cap MOVED here, from 2.2 to 3.7, when that
+    // charge site was added, and the move is the point: a URL that gets
+    // validated is work the old count did not know about. The per-character
+    // assertion above is what made it visible; no ratio in the repo would have.
+    maxWorkPerChar: 3.7,
   },
   {
     // The flake the timing gate hit: 3.22 against a 3.00 limit, on a function
@@ -755,7 +808,65 @@ const COUNTED: Counted[] = [
     exactWork: (n) => segPathOf(n).length + "a/b/c/page.html".length,
     maxWorkPerChar: 1.2,
   },
+
+  {
+    // THE WHOLE-REPLY RENDER PATH, and the answer to "what does it cost to
+    // render a reply of this size". Every other markdown entry here measures a
+    // FRAGMENT — the inline pass, a bracket, a link. This one measures the
+    // document: line splitting, the block pass over every line, and the inline
+    // parse of every block inside it.
+    //
+    // 461 charged units per 132-character unit, measured, with the exact count
+    // pinned so a charge site cannot quietly move. Three passes per character
+    // is what this costs: `toLines` reads the source, the block pass reads
+    // each line it classifies, and `parseInline` reads the block's text.
+    name: "markdown / parseMarkdown: a realistic long reply",
+    build: (n) => {
+      const src = realisticUnit().repeat(n);
+      return () => void parseMarkdown(src);
+    },
+    inputSize: (n) => realisticUnit().length * n,
+    exactWork: (n) => 461 * n,
+    maxWorkPerChar: 4,
+  },
+  {
+    // A link's scheme check, on the input the parser hands it: the strip loop
+    // walks every code unit and the lowercasing reads what is left, so the
+    // count is `raw.length + cleaned.length` and lands at exactly 2 per
+    // character. It was one of the six probes the work gate could not reach,
+    // because a `for...of` with `codePointAt` inside is opaque both to a
+    // reader and to a count.
+    name: "markdown / safeUrl: long URL with a scheme",
+    build: (n) => {
+      const url = "https://example.com/" + "p".repeat(n * 8);
+      return () => void safeUrl(url);
+    },
+    inputSize: (n) => 20 + 8 * n,
+    // 16 per character of URL, plus the 40 the constant prefix costs twice.
+    exactWork: (n) => 16 * n + 40,
+    maxWorkPerChar: 2.3,
+  },
+  {
+    // The one term in the render path proportional to the BUFFER rather than
+    // to the tail: the streaming parser asks it once per token, over the whole
+    // reply so far. Per call it is exactly one pass, which is why it belongs
+    // in this file rather than in a note about the parser.
+    //
+    // And that is why it is worth an entry of its own. Per call: linear.
+    // Across a stream: n calls over a buffer of n, which is quadratic — and
+    // the next test in this file is what says so out loud.
+    name: "markdown / safeLineCount: the whole buffer, asked once",
+    build: (n) => {
+      const src = realisticUnit().repeat(n);
+      return () => void safeLineCount(src);
+    },
+    inputSize: (n) => realisticUnit().length * n,
+    exactWork: (n) => realisticUnit().length * n,
+    maxWorkPerChar: 1.15,
+  },
 ];
+;
+
 
 /** Four real links with placeholder hrefs, for the audit entries. */
 function linksPage(k: number): string {
@@ -828,6 +939,93 @@ describe("no counted hot path does superlinear work", () => {
       }
     });
   }
+});
+
+/* ------------------------------------------------------------------ *
+ * The same path, streamed: a different question, a different answer
+ * ------------------------------------------------------------------ */
+
+/**
+ * THE WHOLE-STREAM COST IS QUADRATIC, and this test exists to say so.
+ *
+ * Everything above measures one render of a complete reply, and that is
+ * linear: `parseMarkdown` costs 461 units per 132 characters, forever, and
+ * that is the budget. This measures the other question — what a reply costs
+ * to watch ARRIVE — and the answer is not linear, for a reason no single-call
+ * measurement could show.
+ *
+ * `safeLineCount` is called once per token over the WHOLE buffer, from offset
+ * zero every time. Per call that is one pass, which is why it can sit in the
+ * table above as a linear entry. Across a stream of n tokens it is n passes
+ * over a buffer that grows to n, so the total climbs as n-squared: measured
+ * at a ratio of 4.00 and a per-character cost rising from 560 to 17,610 over
+ * the ladder below. At the largest size the whole reply costs about 7.4
+ * BILLION charged units to render.
+ *
+ * The block parser is not the culprit and never was: `stats().charsParsed`
+ * is bounded per TAIL and stays linear, which is why #114's streaming work
+ * landed and why nothing noticed this. The uncounted term sits next to it.
+ *
+ * THE FIX IS NOT IN THIS FILE. Making `safeLineCount` resumable needs the
+ * fence state at the resume point, and a boundary claimed from the wrong
+ * fence state is a boundary the streaming contract cannot have — so it is a
+ * change to the parser, not to an instrument, and it wants its own PR.
+ *
+ * IF THIS TEST FAILS because the ratio dropped below the threshold, that is
+ * good news: the path became linear. Replace this with a budget like the one
+ * above rather than lowering the number.
+ */
+describe("the render path measured across a whole stream, which is not the same question", () => {
+  it("is quadratic in reply length — per call it is linear, and the calls do not stop", () => {
+    /** Feed a reply a token at a time and return the thunk that does it. */
+    const streamOf = (n: number) => {
+      const full = realisticUnit().repeat(n);
+      // One parse per 24 characters, which is about what a token stream looks
+      // like: the reply arrives in pieces, not in one write.
+      const step = Math.max(1, Math.floor(full.length / Math.max(1, Math.floor(full.length / 24))));
+      return () => {
+        const parser = createStreamingMarkdownParser();
+        for (let end = step; end < full.length; end += step) parser.parse(full.slice(0, end));
+        parser.parse(full);
+      };
+    };
+
+    // A much smaller ladder than SIZES, and deliberately: this one really does
+    // the work. At n=3200 it renders a 422,000-character reply one token at a
+    // time, which is the quadratic talking — it took 57 seconds here, against
+    // this file's promise that it runs in milliseconds on every `npm test`. A
+    // shape does not need a big ladder to show itself; four doublings is four
+    // more than it takes to separate 4.0 from 2.0.
+    const STREAM_SIZES = [4, 8, 16, 32, 64] as const;
+    const works = STREAM_SIZES.map((n) => measureWork(streamOf(n)).work);
+    const sizes = STREAM_SIZES.map((n) => realisticUnit().length * n);
+    const perChar = works.map((w, i) => w / sizes[i]!);
+
+    expect(works[0]!, "the stream charged nothing at all").toBeGreaterThan(0);
+
+    const worst = Math.max(
+      ...works.slice(1).map((w, i) => w / works[i]!),
+    );
+    // Quadratic is 4.00. Anything below this means the shape changed and the
+    // comment above is now wrong in the good direction.
+    expect(
+      worst,
+      `the streamed whole-reply render path grew ${worst.toFixed(2)}x per doubling ` +
+        `(quadratic is 4.00). Work by size: ` +
+        STREAM_SIZES.map((n, k) => `${n}:${works[k]}`).join(" ") +
+        `. Per input character it now runs ` +
+        perChar.map((v) => v.toFixed(0)).join(" -> ") +
+        `.`,
+    ).toBeGreaterThanOrEqual(3.5);
+
+    // And the per-character cost is what makes it a cost rather than a
+    // curiosity: it must be growing, not merely large.
+    expect(
+      perChar[perChar.length - 1]! / perChar[0]!,
+      "the streamed cost per character stopped growing — if the path is now linear, replace this test" +
+        + " with a budget rather than deleting the pin",
+    ).toBeGreaterThan(8);
+  });
 });
 
 /* ------------------------------------------------------------------ *

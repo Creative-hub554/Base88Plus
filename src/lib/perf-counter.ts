@@ -54,7 +54,21 @@
  *    the charge sites, and a charge site inside an early return is a hole.
  *
  * WHAT IS NOW COUNTED, after #122 finished the job #120 started:
- * TWENTY-SEVEN of the timing gate's thirty-three probes. The markdown parser
+ * NOW THE WHOLE-REPLY RENDER PATH HAS A BUDGET, which is the claim that
+ * matters most to a user: rendering a reply of length n costs at most 461
+ * units per 132 characters, forever, counted rather than timed.
+ * `tests/perf-work-counters.test.ts` pins it exactly, and it took charging
+ * `toLines`, the block pass and `safeUrl` — the three terms between the
+ * source string and the rendered blocks that nothing had been counting.
+ *
+ * And the budget immediately paid for itself by finding the one term that is
+ * NOT proportional: `safeLineCount` reads the WHOLE buffer once per token, so
+ * it is linear per call and quadratic across a stream. Measured at a ratio of
+ * 4.00, per-character cost rising 560 -> 17,610. That is pinned as a measured
+ * fact with its own test, because the fix is a change to the streaming parser
+ * and not something an instrument should quietly paper over.
+ *
+ * TWENTY-NINE of the timing gate's thirty-three probes. The markdown parser
  * and the reply helpers were first, then the demo scanners — `forEachTag`,
  * `forEachTagRun`, `indexOfCloseAnchor`, `textBetween`, the link audit, the
  * three demo gates and the sanitiser. That corpus was not chosen for convenience: it is the set

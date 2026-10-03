@@ -13,6 +13,55 @@ process. Download zips: the
 ## [Unreleased]
 
 ### Changed
+- The whole-reply render path now has a deterministic work budget: rendering a
+  reply of length n costs at most **461 charged units per 132 characters**,
+  whatever the length — counted, not timed.
+
+  That is the claim a user would actually ask for, and it needed three terms
+  that nothing was counting: the line split, the block pass, and `safeUrl`.
+  The last one is the interesting one. A link's scheme check walks every code
+  unit and then lowercases what is left, so a 39-character link unit really did
+  cost 65 units of work that no count could see. The many-links cap moved from
+  2.2 to 3.7 when that charge site landed, and nothing else in the repo would
+  have noticed: a constant factor changes no ratio, in this gate or the timing
+  one.
+
+  Coverage is now **29 of the 33 timing-gate probes** deterministically counted,
+  up from 8 when the work gate started.
+
+- **The budget found the hole in its own path: `safeLineCount` makes the
+  streamed reply quadratic.**
+
+  It reads the whole buffer, from offset zero, once per token. Per call that is
+  one pass, which is why it is an ordinary linear entry in the table. Across a
+  stream of n tokens it is n passes over a buffer of n, so the whole reply
+  costs n-squared to watch arrive: measured at a **ratio of 4.00**, with the
+  per-character cost climbing **560 -> 17,610** over the ladder. At the largest
+  size measured, rendering one 422,000-character reply a token at a time costs
+  about 7.4 billion charged units.
+
+  The block parser is not the culprit and never was. `stats().charsParsed` is
+  bounded per TAIL and stays linear, which is precisely why #114's streaming
+  work landed and why this sat next to it unnoticed for so long. The two claims
+  were never the same claim: one counts the block parser's input, the other
+  counts everything the render does with the buffer.
+
+  It is pinned as a measured fact with a test of its own rather than left as a
+  comment, because the fix is a change to the streaming parser — resuming
+  `safeLineCount` needs the fence state at the resume point, and a boundary
+  claimed from the wrong fence state is a boundary the streaming contract
+  cannot have. That is a parser change, not an instrument change, and it wants
+  its own PR. If the shape ever changes, that test fails and says to replace it
+  with a budget.
+
+  Cost of the new charge sites: five extra calls per 132 characters at the
+  10.1ns measured in #122, so ~0.5% of the 9.9 microseconds it takes to parse
+  that unit. The whole-function A/B reads +4.4% to +5.9% across two interleaved
+  runs, which is more than that arithmetic predicts and inside the 7.5%
+  run-to-run spread this repo measures on an unchanged build — reported as the
+  unresolved measurement it is.
+
+### Changed
 - The demo scanners now charge the work counter, taking the work gate from
   eight counted functions to twenty-seven of the timing gate's thirty-three
   probes: `forEachTag`, `forEachTagRun`, `indexOfCloseAnchor`, `textBetween`,

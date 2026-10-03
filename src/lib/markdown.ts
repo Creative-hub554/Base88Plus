@@ -115,6 +115,10 @@ export function safeUrl(raw: string): string | null {
     if (code <= 0x20 || code === 0x7f) continue;
     cleaned += ch;
   }
+  // Two reads of every character: the strip loop above, and `toLowerCase`
+  // below. Charged as the string actually walked, not as the input, because
+  // the strip can remove characters and the lowercasing is on what is left.
+  chargeWork(raw.length + cleaned.length);
   if (cleaned.length === 0) return null;
   // Protocol-relative: inherits the current scheme, so it is never ours.
   if (cleaned.startsWith("//")) return null;
@@ -482,7 +486,13 @@ function isWordChar(ch: string): boolean {
 // Block parsing
 // ---------------------------------------------------------------------------
 
-/** Split into lines, tolerating CRLF. */
+/**
+ * Split into lines, tolerating CRLF.
+ *
+ * One pass over the text, and charged as one: this runs on the streaming path
+ * once per token over the whole buffer, so its cost is the first term in the
+ * render budget and it has to be countable rather than assumed.
+ */
 function toLines(text: string): string[] {
   const lines: string[] = [];
   let start = 0;
@@ -495,6 +505,7 @@ function toLines(text: string): string[] {
     }
   }
   if (start < text.length) lines.push(text.slice(start));
+  chargeWork(text.length);
   return lines;
 }
 
@@ -574,6 +585,12 @@ function parseBlocksFrom(lines: string[], start: number): ParsedRun {
   const starts: number[] = [];
   let i = start;
   let blockStart = start;
+  // Characters the BLOCK pass looked at, accumulated and charged once on the
+  // way out. Every branch below reads its line at least twice (the blank test,
+  // then a fence/heading/bullet test), and the inline parse of a block charges
+  // for itself separately — so this term is the block structure only, and the
+  // two together are the whole render cost of the lines.
+  let scanned = 0;
 
   // Every block below is pushed through here, so its start line is recorded
   // in the same place the block is created.
@@ -585,6 +602,7 @@ function parseBlocksFrom(lines: string[], start: number): ParsedRun {
   while (i < lines.length) {
     const line = lines[i];
     const trimmed = line.trim();
+    scanned += line.length + 1;
 
     // Blank line: a paragraph separator, and nothing else.
     if (trimmed.length === 0) {
@@ -708,6 +726,7 @@ function parseBlocksFrom(lines: string[], start: number): ParsedRun {
     emit({ kind: "paragraph", children: parseInline(paragraph.join("\n")) });
   }
 
+  chargeWork(scanned);
   return { blocks, starts, next: i };
 }
 
@@ -763,6 +782,13 @@ export function safeLineCount(source: string): number {
   /** Line index of the most recent blank line outside a fence, or -1. */
   let blankLine = -1;
   let best = 0;
+
+  // Charged the WHOLE buffer, once per call, because that is what it reads:
+  // it starts at offset 0 every time, so a caller that asks once per streamed
+  // token pays for the whole reply each time. That is the one term in the
+  // render path which is not proportional to the TAIL, and it was invisible
+  // until it was counted. See tests/perf-work-counters.test.ts.
+  chargeWork(source.length);
 
   while (offset <= source.length) {
     let end = offset;

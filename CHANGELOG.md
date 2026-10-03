@@ -90,6 +90,33 @@ process. Download zips: the
 
 ### Fixed
 
+- The HTML scanners over generated demo files are linear now. Five were
+  quadratic and one was cubic, all from the same mistake: a regex of the
+  form `/<[a-zA-Z][^>]*>/` used to walk a document. `[^>]*` cannot cross a
+  `>`, so a `<` with no `>` after it made the engine scan the rest of the
+  file looking for one, fail, and try again at the next `<`.
+
+  That is not a hypothetical shape for model output — a truncated response
+  ends mid-tag — and the demo gates run over whatever the model wrote.
+  Measured on adversarial input, every one of these grew 4x per doubling:
+  the link audit's tag walk (12.4ms for a 3200-character page), the
+  label extraction inside it, the `visibleText` gate (4.4ms for 6400
+  characters), and the sanitiser's quote repair, which sat inside a
+  fixed-point loop and so paid the cost twice per file. The sanitiser's
+  tag alternation was worse than quadratic — `[^>]*` on both sides of a
+  required literal backtracks through every position twice — and took
+  730ms for 800 unterminated anchors, growing about 8x per doubling.
+
+  Two more were quadratic for a different reason: a page's labels were
+  resolved by re-scanning and re-slugging the whole page list once per
+  link (and once per file, which is just as bad when a demo has about as
+  many files as pages), and each anchor lowercased the entire document to
+  find its `</a>`.
+
+  Output is unchanged, which is the part worth checking: the rewritten
+  walk is pinned against the original regexes on a corpus of awkward
+  markup, and the demo link audit still reports the same 71 links, 0
+  inert and 6 dead across the six cached demos.
 - A long assistant reply no longer freezes the chat panel while it streams.
   The panel re-renders on every token and every assistant message in it,
   so a reply of length n was parsed n times over — about 415ms of

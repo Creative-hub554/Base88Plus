@@ -20,7 +20,11 @@ import {
   auditDemoLinks,
   demoNavIsWired,
   formatDemoLinkAudit,
-  pageForLabel,
+  buildPageSlugIndex,
+  type PageSlugIndex,
+  forEachTag,
+  indexOfCloseAnchor,
+  pageForLabelIn,
   textBetween,
 } from "@/lib/demo-link-audit";
 import { formatGateResult, runDemoGates } from "@/lib/demo-gates";
@@ -291,8 +295,6 @@ export async function generateTemplateDemoOrThrow(
  * output is assembled from slices, so no pass ever grows the string and
  * the matcher never sees text it produced.
  */
-const BROKEN_TAG_RE =
-  /[ \t]*(?:<img\b[^>]*\bsrc=["']([^"'#]+)["'][^>]*>|<script\b[^>]*\bsrc=["']([^"'#]+)["'][^>]*>\s*<\/script>|<link\b[^>]*\bhref=["']([^"'#]+)["'][^>]*>|<a\b[^>]*\bhref=["']([^"'#]+)["'][^>]*>)[ \t]*\n?/gi;
 
 /** The replacement for a dead anchor: a synthesized minimal open tag. */
 const NEUTRAL_ANCHOR = '<a href="#">';
@@ -308,23 +310,86 @@ function stripBrokenPass(html: string, emitted: Set<string>): string {
 
   let out = "";
   let last = 0;
-  BROKEN_TAG_RE.lastIndex = 0;
-  for (
-    let m = BROKEN_TAG_RE.exec(html);
-    m !== null;
-    m = BROKEN_TAG_RE.exec(html)
-  ) {
-    out += html.slice(last, m.index);
-    last = m.index + m[0].length;
-    const [tag, imgSrc, scriptSrc, linkHref, anchorHref] = m;
-    if (anchorHref !== undefined) {
-      if (keepAnchor(anchorHref)) {
+  let pos = 0;
+
+  // Walked by hand, one `<` at a time, rather than with the alternation this
+  // replaces. That pattern was not merely quadratic but CUBIC on
+  // `<a href="x"` repeated with no `>` anywhere: each `<` ran `[^>]*` to the end
+  // of the file, then backtracked through every position hunting for `href=`,
+  // then ran `[^>]*` again after the value — and `sanitizeDemoFiles` runs this
+  // pass inside a fixed-point loop, so it paid that twice. Measured at 730ms
+  // for 800 unterminated anchors, growing ~8x per doubling; it is now linear.
+  //
+  // The cost was the UNBOUNDED `[^>]*`, and the fix is to stop using it: find
+  // the attribute with `indexOf`, and treat "no `>` anywhere ahead" as the end
+  // of the scan rather than as a reason to try the next `<`. That is sound
+  // because if there is no `>` after a position there is none after any later
+  // position either.
+  //
+  // NOT `forEachTag`, deliberately: the alternation looked for `<img`/`<script`/
+  // `<link`/`<a` at ANY `<`, independent of where the enclosing tag ended, so
+  // `<im<script src="x.js"></script>g src='missing.png'>` matched the inner
+  // `<script`. Delimiting by the first `>` would have missed it and left the
+  // spliced `<img>` behind — see "removes a broken tag spliced into shape by a
+  // prior pass" in tests/demo-sanitizer.test.ts.
+  while (pos < html.length) {
+    const lt = html.indexOf("<", pos);
+    if (lt === -1) break;
+    const kind = refKindAt(html, lt);
+    if (kind === null) {
+      pos = lt + 1;
+      continue;
+    }
+    // No `>` ahead means no later `<` can complete a tag either.
+    const gt = html.indexOf(">", lt + 1);
+    if (gt === -1) break;
+
+    // The attribute name must appear BEFORE the first `>`, because the old
+    // leading `[^>]*` could not cross it. The VALUE may cross it: `[^"'#]+`
+    // permits `>`, so `<img src="a>b">` really did carry the value `a>b`.
+    const attr = kind === "img" || kind === "script" ? "src" : "href";
+    const found = refValueIn(html, lt + 1, gt, attr);
+    // The `[^>]*>` that closed every branch of the alternation: the match ran
+    // on to the first `>` after the value, and INCLUDED it.
+    const afterGt = found === null ? -1 : html.indexOf(">", found.after);
+    if (found === null || afterGt === -1) {
+      pos = lt + 1;
+      continue;
+    }
+    let end = afterGt + 1;
+    if (kind === "script") {
+      // The script alternative also claimed the body and closing tag, so the
+      // whole element went into the match — and the trailing padding below
+      // belongs after THAT, not after the value.
+      const close = indexOfCloseScript(html, end);
+      if (close === -1) {
+        pos = lt + 1;
+        continue;
+      }
+      end = close;
+    }
+    while (end < html.length && isInlineSpace(html.charCodeAt(end))) end += 1;
+    if (html.charCodeAt(end) === 10) end += 1; // the trailing `\n?`
+
+    // Leading `[ \t]*` was part of the match too, so the whitespace before the
+    // tag was re-emitted with it. That run only reaches back as far as `last`,
+    // because the scan resumes there.
+    let start = lt;
+    while (start > last && isInlineSpace(html.charCodeAt(start - 1))) start -= 1;
+
+    const tag = html.slice(start, end);
+    out += html.slice(last, start);
+    last = end;
+    pos = end;
+
+    if (kind === "a") {
+      if (keepAnchor(found.value)) {
         out += tag;
         continue;
       }
       // Compare the path part only — fragments and query strings ride
       // along on an emitted page (post.html#intro, post.html?id=2).
-      const filePath = anchorHref.split("#")[0].split("?")[0].trim();
+      const filePath = found.value.split("#")[0].split("?")[0].trim();
       if (filePath && emitted.has(filePath)) {
         out += tag;
         continue;
@@ -336,11 +401,111 @@ function stripBrokenPass(html: string, emitted: Set<string>): string {
       out += NEUTRAL_ANCHOR;
       continue;
     }
-    const target = imgSrc ?? scriptSrc ?? linkHref;
-    if (keepAsset(target)) out += tag;
+    if (keepAsset(found.value)) out += tag;
   }
   out += html.slice(last);
   return out;
+}
+
+/** Space or tab — the `[ \t]` the old pattern's padding matched. */
+function isInlineSpace(code: number): boolean {
+  return code === 32 || code === 9;
+}
+
+/** JS `\w`, which is what `\b` in the old pattern treated as a word character. */
+function isWordCode(code: number): boolean {
+  return (
+    (code >= 97 && code <= 122) ||
+    (code >= 65 && code <= 90) ||
+    (code >= 48 && code <= 57) ||
+    code === 95
+  );
+}
+
+/** ASCII case-insensitive compare against an all-lowercase word. */
+function matchesWord(html: string, at: number, lower: string): boolean {
+  for (let k = 0; k < lower.length; k += 1) {
+    const code = html.charCodeAt(at + k);
+    const want = lower.charCodeAt(k);
+    // Uppercase ASCII sits exactly 32 above lowercase, and every word compared
+    // here is letters only.
+    if (code !== want && code !== want - 32) return false;
+  }
+  return true;
+}
+
+/**
+ * Which of the four tag kinds this alternation matched, or null.
+ *
+ * The old pattern required a `\b` after the name, so `<scripts>` is not a
+ * script tag and `<abc>` is not an anchor. Preserved exactly.
+ */
+function refKindAt(html: string, lt: number): "img" | "script" | "link" | "a" | null {
+  const at = lt + 1;
+  if (matchesWord(html, at, "img") && !isWordCode(html.charCodeAt(at + 3))) return "img";
+  if (matchesWord(html, at, "script") && !isWordCode(html.charCodeAt(at + 6))) return "script";
+  if (matchesWord(html, at, "link") && !isWordCode(html.charCodeAt(at + 4))) return "link";
+  if (matchesWord(html, at, "a") && !isWordCode(html.charCodeAt(at + 1))) return "a";
+  return null;
+}
+
+/**
+ * The `\b(src|href)=["']([^"'#]+)["']` value, with the attribute name required
+ * to start before `to`, or null.
+ *
+ * Faithful in the ways that are easy to get wrong:
+ *  - there is NO `\s*` around the `=`;
+ *  - the value is non-empty and may contain neither a quote nor a `#`;
+ *  - the closing quote need not match the opening one, so `href="'x"` matched
+ *    before and still does;
+ *  - the value is NOT bounded by `to`, because `[^"'#]` permits `>` and a real
+ *    HTML attribute can contain one: `<img src="a>b">` carries `a>b`.
+ *  Greedy `[^"'#]+` cannot usefully backtrack — any shorter match would be
+ *  followed by a character that is not a quote — so the first stop is the only
+ *  candidate, which is what keeps this linear.
+ */
+function refValueIn(
+  html: string,
+  from: number,
+  to: number,
+  attr: "src" | "href",
+): { value: string; after: number } | null {
+  for (let i = from; i + attr.length + 3 <= to; i += 1) {
+    if (i > 0 && isWordCode(html.charCodeAt(i - 1))) continue; // the `\b`
+    if (!matchesWord(html, i, attr)) continue;
+    const eq = i + attr.length;
+    if (html.charCodeAt(eq) !== 61) continue; // `=`, with no `\s*`
+    const open = html.charCodeAt(eq + 1);
+    if (open !== 34 && open !== 39) continue; // `"` or `'`
+    let v = eq + 2;
+    while (v < html.length) {
+      const code = html.charCodeAt(v);
+      if (code === 34 || code === 39 || code === 35) break;
+      v += 1;
+    }
+    if (v === eq + 2) continue; // `[^"'#]+` needs at least one character
+    const close = html.charCodeAt(v);
+    if (close !== 34 && close !== 39) continue;
+    return { value: html.slice(eq + 2, v), after: v + 1 };
+  }
+  return null;
+}
+
+/**
+ * Index just past `</script>` for the `\s*<\/script>` tail of the script
+ * alternative, given the position AFTER the tag's `>`, or -1.
+ */
+function indexOfCloseScript(html: string, afterGt: number): number {
+  let k = afterGt;
+  while (k < html.length && isJsSpace(html.charCodeAt(k))) k += 1;
+  if (html.charCodeAt(k) !== 60 || html.charCodeAt(k + 1) !== 47) return -1; // </
+  if (!matchesWord(html, k + 2, "script")) return -1;
+  return k + 9; // `</script>` is 9 characters
+}
+
+/** The ASCII part of JS `\s`, which is all the old `\s*` could match here. */
+function isJsSpace(code: number): boolean {
+  return code === 32 || (code >= 9 && code <= 13);
 }
 
 /**
@@ -363,40 +528,46 @@ function stripBrokenPass(html: string, emitted: Set<string>): string {
  * names a real page is either relinked here or reported inert there, never
  * both missed.
  */
-const PLACEHOLDER_ANCHOR_RE = /<a\b([^>]*)\bhref="#"/gi;
 
-function relinkPlaceholderNav(html: string, emitted: Set<string>): string {
-  const pages = [...emitted].filter((p) => p.toLowerCase().endsWith(".html"));
+function relinkPlaceholderNav(html: string, pageIndex: PageSlugIndex): string {
   let out = "";
   let last = 0;
-  PLACEHOLDER_ANCHOR_RE.lastIndex = 0;
-  for (
-    let m = PLACEHOLDER_ANCHOR_RE.exec(html);
-    m !== null;
-    m = PLACEHOLDER_ANCHOR_RE.exec(html)
-  ) {
-    const openTag = m[0];
-    const labelEnd = html.indexOf("</a>", m.index + openTag.length);
-    if (labelEnd === -1) continue;
-    const label = textBetween(html, m.index + openTag.length, labelEnd);
+  forEachTag(html, (span) => {
+    const openTag = html.slice(span.start, span.end);
+    if (!openTag.toLowerCase().startsWith("<a")) return;
+    const hrefAt = placeholderHrefAt(openTag);
+    if (hrefAt === -1) return;
+    const labelEnd = indexOfCloseAnchor(html, span.end);
+    if (labelEnd === -1) return;
+    const label = textBetween(html, span.end, labelEnd);
     // The SAME matcher the audit re-derives, so a placeholder that names an
     // emitted page can never survive here and then be reported as inert.
-    const target = pageForLabel(label, pages);
-    if (!target || target.ambiguous) continue;
+    const target = pageForLabelIn(pageIndex, label);
+    if (!target || target.ambiguous) return;
 
     // Slice the href out by hand (a String.replace on the tag reads as a
     // sanitising sink to CodeQL) and keep the anchor's other attributes.
-    const hrefAt = openTag.toLowerCase().indexOf('href="#"');
-    if (hrefAt === -1) continue;
-    out += html.slice(last, m.index);
+    out += html.slice(last, span.start);
     out +=
       openTag.slice(0, hrefAt) +
       `href="${target.page}"` +
       openTag.slice(hrefAt + 'href="#"'.length);
-    last = m.index + openTag.length;
-  }
+    last = span.end;
+  });
   out += html.slice(last);
   return out;
+}
+
+/**
+ * Index of `href="#"` inside an open anchor tag, or -1.
+ *
+ * This replaces the leading half of `/<a\b([^>]*)\bhref="#"/gi`, whose `[^>]*`
+ * was what made the whole scan quadratic on an unterminated `<a` (measured at
+ * 4x per doubling). `forEachTag` has already delimited the tag, so what remains
+ * is a bounded search inside one short string.
+ */
+function placeholderHrefAt(openTag: string): number {
+  return openTag.toLowerCase().indexOf('href="#"');
 }
 
 /**
@@ -413,23 +584,21 @@ function relinkPlaceholderNav(html: string, emitted: Set<string>): string {
  * Manual exec loop over tags (no String.replace sink, no growth, so the
  * fixed-point loop in sanitizeDemoFiles still terminates).
  */
-const TAG_RE = /<[a-zA-Z][^>]*>/g;
 
 function unescapeAttrQuotes(html: string): string {
   let out = "";
   let last = 0;
-  TAG_RE.lastIndex = 0;
-  for (
-    let m = TAG_RE.exec(html);
-    m !== null;
-    m = TAG_RE.exec(html)
-  ) {
-    if (!m[0].includes('\\"')) continue;
-    out += html.slice(last, m.index);
+  // `forEachTag`, not the `/<[a-zA-Z][^>]*>/g` this replaces. That pattern is
+  // quadratic on an unterminated tag, and this runs inside the fixed-point loop
+  // in `sanitizeDemoFiles`, so it paid the cost more than once per file.
+  forEachTag(html, (span) => {
+    const tag = html.slice(span.start, span.end);
+    if (!tag.includes('\\"')) return;
+    out += html.slice(last, span.start);
     // Same length, character for character — only \" becomes '.
-    out += m[0].split('\\"').join("'");
-    last = m.index + m[0].length;
-  }
+    out += tag.split('\\"').join("'");
+    last = span.end;
+  });
   out += html.slice(last);
   return out;
 }
@@ -457,6 +626,13 @@ function unescapeAttrQuotes(html: string): string {
  */
 export function sanitizeDemoFiles(files: ProjectFile[]): ProjectFile[] {
   const emitted = new Set(files.map((f) => f.path));
+  // Once for the whole set, not once per file. Slugging the page list per file
+  // was O(files x pages) — measured at 4x per doubling, and still quadratic
+  // after the per-anchor scan inside it was fixed, because a demo has about as
+  // many files as it has pages.
+  const pageIndex = buildPageSlugIndex(
+    [...emitted].filter((p) => p.toLowerCase().endsWith(".html")),
+  );
   return files.map((f) => {
     if (!f.path.endsWith(".html")) return f;
     let prev = f.content;
@@ -465,7 +641,7 @@ export function sanitizeDemoFiles(files: ProjectFile[]): ProjectFile[] {
       prev = next;
       next = stripBrokenPass(prev, emitted);
     }
-    next = relinkPlaceholderNav(unescapeAttrQuotes(next), emitted);
+    next = relinkPlaceholderNav(unescapeAttrQuotes(next), pageIndex);
     return { ...f, content: next };
   });
 }

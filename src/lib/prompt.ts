@@ -1,3 +1,4 @@
+import { chargeWork } from "./perf-counter";
 import type { ProjectFile } from "./types";
 
 /**
@@ -37,11 +38,22 @@ export function localRefsFromHtml(html: string): string[] {
   const refs: string[] = [];
   const re = /(?:src|href)\s*=\s*["']([^"']+)["']/gi;
   let m: RegExpExecArray | null;
+  // The document, once, plus every match's own length: the second term is
+  // what a per-match rescan of the whole document would inflate, and the
+  // matches of a global regex cannot overlap, so it stays proportional.
+  //
+  // Accumulated in a local and charged once, NOT charged per match: there
+  // are two matches per 48 characters here, and a call per match measured
+  // at 19ns each, +10.9% on this function. The increment is not free either
+  // but it is two orders of magnitude cheaper.
+  let scanned = html.length;
   while ((m = re.exec(html))) {
+    scanned += m[0].length + 1;
     const u = m[1].trim();
     if (!u || /^(https?:)?\/\//i.test(u) || u.startsWith("data:") || u.startsWith("#")) continue;
     if (/\.(html?|css|js|mjs)$/i.test(u)) refs.push(u.replace(/^\.\//, ""));
   }
+  chargeWork(scanned);
   return [...new Set(refs)];
 }
 
@@ -166,21 +178,29 @@ export interface ParsedFile {
  * response contains no anybase block (plain conversational text).
  */
 export function extractFiles(text: string): ParsedFile[] | null {
+  // The block search, the header split, and every per-part trim, all added
+  // into one local and charged once on the way out. A second pass over
+  // `body` would double the total and the work gate would see it.
+  let scanned = text.length;
   const match = text.match(/```anybase\s*\n([\s\S]*?)(?:```|$)/);
   if (!match) return null;
   const body = match[1];
+  scanned += body.length;
   const parts = body.split(/^===\s*(.+?)\s*===\s*$/gm);
   const files: ParsedFile[] = [];
   for (let i = 1; i < parts.length; i += 2) {
     const filePath = parts[i].trim();
     // Trim a single leading newline after the === path === header.
+    scanned += parts[i + 1].length;
     const content = parts[i + 1].replace(/^\r?\n/, "").replace(/\s+$/, "");
     if (filePath) files.push({ path: filePath, content });
   }
+  chargeWork(scanned);
   if (files.length > 0) return files;
   // Small models sometimes emit a fenced block holding a bare HTML document
   // without === file === headers. That's still a usable one-file app —
   // salvage it as index.html instead of discarding the whole attempt.
+  chargeWork(scanned + body.length);
   const trimmed = body.trim();
   if (/^<!doctype html/i.test(trimmed) || /^<html[\s>]/i.test(trimmed)) {
     return [{ path: "index.html", content: trimmed }];
@@ -199,12 +219,18 @@ export function extractFiles(text: string): ParsedFile[] | null {
  * salvage still applies at fence close).
  */
 export function extractPartialFiles(text: string): ParsedFile[] {
+  // indexOf plus the slice that follows it: one linear pass over the reply,
+  // added into a local and charged once. This function is called on EVERY
+  // streamed token, so it is the one in this module where a second pass
+  // would hurt most.
+  let scanned = text.length;
   const start = text.indexOf("```anybase");
   if (start === -1) return [];
   const rest = text.slice(start + "```anybase".length).replace(/^\r?\n/, "");
   const endIdx = rest.indexOf("```");
   const closed = endIdx !== -1;
   const body = closed ? rest.slice(0, endIdx) : rest;
+  scanned += body.length;
   const parts = body.split(/^===\s*(.+?)\s*===\s*$/gm);
   const files: ParsedFile[] = [];
   for (let i = 1; i < parts.length; i += 2) {
@@ -212,11 +238,13 @@ export function extractPartialFiles(text: string): ParsedFile[] {
     // block has closed.
     if (i + 2 >= parts.length && !closed) continue;
     const filePath = String(parts[i]).trim();
+    scanned += String(parts[i + 1] ?? "").length;
     const content = String(parts[i + 1] ?? "")
       .replace(/^\r?\n/, "")
       .replace(/\s+$/, "");
     if (filePath) files.push({ path: filePath, content });
   }
+  chargeWork(scanned);
   return files;
 }
 
@@ -225,6 +253,9 @@ export function extractPartialFiles(text: string): ParsedFile[] {
  * narration instead of raw code (the code lands in the file editor).
  */
 export function stripCodeBlocks(text: string): string {
+  // Two regex passes and a trim, all linear in the reply; charged once so
+  // the ratio pins the reply length, not the number of blocks in it.
+  chargeWork(text.length);
   return text
     .replace(/```anybase\s*\n[\s\S]*?(?:```|$)/g, "")
     .replace(/\n{3,}/g, "\n\n")

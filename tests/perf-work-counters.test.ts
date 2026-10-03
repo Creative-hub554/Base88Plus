@@ -46,13 +46,22 @@
  *
  * WHAT CANNOT BE COUNTED, stated here so it is not discovered later by
  * assuming this file covers more than it does: work that happens inside a
- * single regex call. `isEmptyFenceOutput` is one `.replace()`; the characters
- * V8 steps through are not observable from JavaScript, and no charge site can
- * see them. The same goes for the anchored `test()` calls in
- * `isSummaryImitation` and the `replace` chain in `stripCodeBlocks` below the
- * line the counter charges. There is a test that pins this gap rather than
- * leaving it to prose, because a coverage claim that is never checked decays
- * into a coverage claim that is wrong.
+ * single regex call. The characters V8 steps through are not observable from
+ * JavaScript, and no charge site can see them without rewriting the function
+ * as a hand-written loop.
+ *
+ * That is no longer hypothetical for this corpus — it WAS the reason
+ * `isEmptyFenceOutput` could not be counted at all, and it was also the
+ * worst-reading probe in the timing gate, with the least headroom of all 33.
+ * Rewriting it as an explicit scan (#121) made it countable AND removed two
+ * full-length copies from a per-turn path, so the gap closed from the
+ * implementation side rather than by pretending it away. The lesson generalises:
+ * when the deterministic instrument wants a rewrite the code can afford, do the
+ * rewrite instead of documenting the hole.
+ *
+ * One function still cannot be counted — `isSummaryImitation`, whose work is
+ * one anchored regex `test()` — and there is a test that pins that fact, so
+ * the gap cannot quietly grow back.
  *
  * THE COST OF THE WHOLE FILE is a few microseconds: it is counting, not
  * timing, so there is no warm-up, no repeated sampling and no budget to spend.
@@ -347,6 +356,47 @@ const COUNTED: Counted[] = [
     maxWorkPerChar: 1.1,
   },
   {
+    // THE ONE THAT COULD NOT BE COUNTED UNTIL IT WAS REWRITTEN. Its work used
+    // to be `replace(/```[a-zA-Z]*/g, "").trim().length === 0`, and the
+    // characters a regex walks are not observable from JavaScript, so there was
+    // nothing to charge. It is now an explicit character scan (#121).
+    //
+    // The count is worth reading rather than skimming: it is NOT a fixed
+    // multiple of the input. On this all-fence input the scan reads every
+    // character, so it charges 2 x input — the pre-pass and the loop. On a
+    // healthy reply it would charge the pre-pass plus the handful of characters
+    // before the first real prose, which is the property the rewrite was for.
+    name: "prompt / isEmptyFenceOutput: narration full of fence markers",
+    build: (n) => {
+      const narration = "```\n".repeat(n);
+      return () => void isEmptyFenceOutput(narration);
+    },
+    inputSize: (n) => 4 * n,
+    // The `includes` pre-pass reads the whole string; the scan reads all of it
+    // again on this input, because every character is part of a marker.
+    exactWork: (n) => 8 * n,
+    maxWorkPerChar: 2.2,
+  },
+  {
+    // Counted THROUGH its callee, not in its own body: this function charges
+    // nothing itself and reaches the scan only because `hadFence` is false and
+    // there is no error — which is exactly the case it exists to catch. Worth
+    // listing anyway, because the two short-circuits above it are the common
+    // path and the third is the interesting one.
+    //
+    // It also gives the liveness pin something to do here: if
+    // `isEmptyFenceOutput` ever stops charging, this entry's count drops to
+    // zero and the work > 0 assertion fails, naming a function that looks fine.
+    name: "prompt / shouldOfferContinue: a long narration that is all fence markers",
+    build: (n) => {
+      const narrationText = "```\n".repeat(n);
+      return () =>
+        void shouldOfferContinue({ hadFence: false, files: null, error: null, narrationText });
+    },
+    inputSize: (n) => 4 * n,
+    maxWorkPerChar: 2.2,
+  },
+  {
     // The per-match term is what makes this worth counting: the document is
     // charged once, and each match is charged again on its own length, so a
     // per-match rescan of the whole document — the #115 shape, in a function
@@ -438,36 +488,19 @@ describe("no counted hot path does superlinear work", () => {
  * ------------------------------------------------------------------ */
 
 describe("the functions counting cannot reach are named, not assumed", () => {
-  // Each of these does its work inside a single regex call, where the
-  // characters V8 steps through are not observable from JavaScript. There is no
-  // charge site that could see them without rewriting the function as a hand-
-  // written loop, which is a change to shipped code made only to make a test
-  // able to see it — a bad trade unless the rewrite is wanted on its own merit.
+  // ONE function is left, and this test exists so it stays exactly one.
+  // `isSummaryImitation` does its work inside one anchored regex `test()`,
+  // where the characters V8 steps through are not observable from JavaScript.
+  // There is no charge site that could see them without rewriting it as a
+  // hand-written scan — which is what #121 did for its neighbour
+  // `isEmptyFenceOutput`, and which would be worth doing here too if the
+  // rewrite were wanted on its own merit rather than to satisfy an instrument.
   //
-  // So they stay on the timing gate, and this test exists to keep that
-  // statement honest. It fails the moment someone DOES instrument one, which
-  // is the point: the fix is to add it to COUNTED above and delete this, not to
-  // relax the assertion.
-  //
-  // This is not a comfortable gap. The timing gate's own envelope report, on
-  // the run that prompted this file, put `isEmptyFenceOutput` at the TOP of its
-  // 33 probes at 2.45-2.53 against the 3.00 limit — the least headroom in the
-  // corpus — and it is one of the three this file cannot count. So the one
-  // function with the weakest timing margin is the one with no deterministic
-  // backstop at all. One run is not a pattern and the ordering moves between
-  // runs, but the direction is the wrong way, and the honest response is to
-  // name it rather than to let the coverage map look tidier than it is.
-  // The real fix is to rewrite `isEmptyFenceOutput` as an explicit scan, which
-  // would make it countable AND remove a regex from a per-turn path — worth
-  // doing on its own merits, not as an instrument.
-  it("charges nothing for the per-turn predicates, so their cover is still timing", () => {
-    const narration = "```\n".repeat(500);
-    expect(measureWork(() => isEmptyFenceOutput(narration)).work).toBe(0);
-    expect(
-      measureWork(() =>
-        shouldOfferContinue({ hadFence: false, files: null, error: null, narrationText: narration }),
-      ).work,
-    ).toBe(0);
+  // So it stays on the timing gate, and this assertion fails the moment anyone
+  // DOES instrument it. That is deliberate: the fix is to add it to COUNTED
+  // above and delete this, not to relax the assertion. A coverage gap nobody
+  // checks is a coverage gap that grows.
+  it("charges nothing for isSummaryImitation, so its cover is still timing", () => {
     expect(
       measureWork(() =>
         isSummaryImitation({
@@ -477,5 +510,14 @@ describe("the functions counting cannot reach are named, not assumed", () => {
         }),
       ).work,
     ).toBe(0);
+    // Sanity on the input, so a future edit that makes this vacuous is
+    // visible: the predicate really does answer true on this narration.
+    expect(
+      isSummaryImitation({
+        hadFence: false,
+        files: null,
+        narrationText: "[wrote 3 file(s)] ".repeat(500),
+      }),
+    ).toBe(true);
   });
 });

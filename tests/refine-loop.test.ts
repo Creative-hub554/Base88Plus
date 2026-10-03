@@ -231,6 +231,84 @@ describe("shouldOfferContinue (one-click recovery flag)", () => {
     expect(isEmptyFenceOutput("plain prose")).toBe(false);
   });
 
+  it("isEmptyFenceOutput: the explicit scan matches the regex it replaced", () => {
+    // The oracle. `isEmptyFenceOutput` was rewritten as a hand-written
+    // character scan (see its header for the measured reasons), and a rewrite
+    // of a predicate is exactly where a subtle behaviour change hides — a
+    // different whitespace set, an unterminated marker, a tag word with a digit
+    // in it. So the implementation it replaced stays here, verbatim, as the
+    // thing the new one has to agree with forever.
+    //
+    // This is the same move as tests/scanner-scaling.test.ts, which keeps the
+    // pre-#115 regexes as a differential oracle after they were replaced: the
+    // old code is the specification, and deleting it deletes the specification.
+    const oracle = (narration: string): boolean => {
+      if (!narration.includes("```")) return false;
+      return narration.replace(/```[a-zA-Z]*/g, "").trim().length === 0;
+    };
+    const impl = isEmptyFenceOutput;
+
+    // The hand-picked shapes first, each labelled with WHY it is a case. Every
+    // one of these was a way to get the two to disagree.
+    const CASES: Array<[string, string]> = [
+      // The two documented answers.
+      ["plain prose", "no fence at all"],
+      ["```\n\n```", "the observed degeneration"],
+      ["```any\n\n```any", "a tag word on both markers"],
+      ["```js\nconst x = 1;\n```\nDone!", "a real snippet plus prose"],
+      // `trim()` removes far more than space and newline, and the scan has to
+      // agree about all of it or a reply padded with NBSP reads as degenerate.
+      ["```\n\u00a0\u2028\u3000\ufeff```", "non-ASCII blank padding"],
+      ["```\u2000\u200a\u202f\u205f\u1680```", "the rest of the Zs category"],
+      ["```\r\n\t\v\f```", "every ASCII blank"],
+      // A four-backtick run leaves one backtick behind, so it is NOT degenerate.
+      // This is the case most likely to be got wrong by a scan that assumes
+      // markers always come in threes.
+      ["````", "a four-backtick run"],
+      ["```\n````", "a three-run then a four-run"],
+      // The tag word is [a-zA-Z]* and greedy but must not cross a newline, so
+      // a digit or a dot ends it and whatever follows must be judged as text.
+      ["```js1", "a tag word followed by a digit"],
+      ["```js.any", "a tag word followed by a dot"],
+      ["```JS", "an upper-case tag word"],
+      ["```\u00e9", "a non-ASCII tag word, which is not a tag word"],
+      // An unterminated marker is the shape that made the old scanners
+      // quadratic, so the scan must terminate on it too.
+      ["```", "a bare unterminated marker"],
+      ["```js", "an unterminated marker with a tag word"],
+      ["`\n`", "single backticks, which are not markers"],
+      // Whitespace only, with no marker: not degenerate, because there is no
+      // fence at all — the `includes` pre-pass decides this one.
+      ["   \n  ", "whitespace with no fence"],
+      ["", "the empty string"],
+    ];
+    for (const [input, why] of CASES) {
+      expect(impl(input), `${why}: ${JSON.stringify(input)}`).toBe(oracle(input));
+    }
+
+    // Then the shapes nobody thought of. A fixed-seed LCG, because a fuzz that
+    // cannot be replayed is a fuzz whose failure can never be reproduced.
+    //
+    // The alphabet is chosen for the ways the two can disagree rather than for
+    // realism: every blank `trim()` knows, the pieces of a fence marker, and
+    // the characters that terminate a tag word.
+    const ALPHABET = ["`", "`", "`", "j", "s", "a", "Z", "1", ".", "\n", " ", "\u00a0", "x"];
+    let seed = 0x2f6e2b1;
+    const next = () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+    let checked = 0;
+    for (let i = 0; i < 20000; i++) {
+      const len = 1 + Math.floor(next() * 24);
+      let s = "";
+      for (let k = 0; k < len; k++) s += ALPHABET[Math.floor(next() * ALPHABET.length)];
+      expect(impl(s), `fuzz #${i} seed 0x2f6e2b1: ${JSON.stringify(s)}`).toBe(oracle(s));
+      checked++;
+    }
+    expect(checked).toBe(20000);
+  });
+
   it("extractPartialFiles: streams only completed sections, matching extractFiles at close", () => {
     const head = 'narration\n```anybase\n=== index.html ===\n<html>full</html>\n\n';
     // Only index.html has a following boundary — styles.css is still growing.

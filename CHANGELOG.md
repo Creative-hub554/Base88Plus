@@ -12,6 +12,76 @@ process. Download zips: the
 
 ## [Unreleased]
 
+### Changed
+- `isEmptyFenceOutput` is now an explicit character scan instead of
+  `narration.replace(/```[a-zA-Z]*/g, "").trim().length === 0`, which makes it
+  work-countable and removes two full-length copies of the reply from a
+  per-turn path.
+
+  The old expression answered a yes/no question by building two complete
+  copies of the narration. The scan stops at the first character that is
+  neither whitespace nor part of a fence marker, so a healthy reply — the
+  overwhelmingly common case — is decided in its first few characters.
+  Measured A/B in one process, interleaved, min of 11 rounds:
+
+  | narration | old | new | |
+  |---|---|---|---|
+  | fences then prose (a real reply) | 0.00532 ms | 0.00004 ms | **-99.2%** |
+  | prose then a fence | 0.04848 ms | 0.00003 ms | **-99.9%** |
+  | stray backticks and 4-runs | 0.08014 ms | 0.00003 ms | **-100%** |
+  | every byte a fence marker (degenerate) | 0.02324 ms | 0.01121 ms | **-51.8%** |
+  | no fence at all (control) | 0.00013 ms | 0.00013 ms | +0.3% |
+
+  Most of that is the early exit rather than a faster per-character loop, and
+  the control is in the table so the case with nothing to win can be seen not
+  to have moved.
+
+  It also closed the last *reachable* hole in the work gate. `isEmptyFenceOutput`
+  was the worst-reading probe in the superlinearity gate's corpus — the least
+  headroom of all 33 — and it could not be counted, because work inside a
+  single regex call is not observable from JavaScript. The weakest margin in
+  the timing gate belonged to the one function with no deterministic backstop.
+  It is now pinned by count, exactly, at `2n` on an all-fence narration, and
+  `shouldOfferContinue` is countable through it.
+
+  The whitespace test was the one genuinely new decision: the old code got
+  `trim()`'s full definition for free, and a hand-written scan has to spell it
+  out. The obvious spelling — a regex per character — measured **+141%** on
+  non-ASCII blank padding, because `text[at]` allocates a fresh string for
+  every non-ASCII code unit. Switching on the code unit allocates nothing and
+  came out 28.8% faster than the regex it replaces.
+
+  Behaviour is unchanged and that is pinned rather than asserted: the old
+  regex stays in `tests/refine-loop.test.ts` as a differential oracle, checked
+  against 19 hand-picked disagreement cases and 20,000 seeded fuzz strings.
+  All three ways found to make the two diverge — dropping a blank from the
+  switch, treating a four-backtick run as a marker, letting the tag word cross
+  a non-letter — are caught by it.
+
+### Fixed
+
+- The superlinearity gate failing its own re-measurement: a probe that
+  CONFIRM rescued could still turn the build red.
+
+  A row of the envelope report recorded the **max** of both readings, on
+  the principle that an instrument's diary should never flatter it. The
+  report test then asserted that its worst row was inside the limit — so
+  the two policies contradicted each other, and the contradiction only
+  showed up once a probe was actually noisy enough to need rescuing.
+
+  It showed up on the run that measured this change.
+  `prompt / shouldOfferContinue` read **4.86** against the 3.00 limit, was
+  re-measured under the limit, passed the gate — and then failed the
+  report test at 4.86, with the step summary publishing the exact number
+  the gate had just overruled. The gate was right and its own record said
+  otherwise, which is worse than either being wrong alone.
+
+  A row now ranks on the reading the verdict rested on and prints the
+  rejected one beside it
+  (`(re-measured: first reading 4.86)`), so nothing is hidden and nothing
+  is counted twice. A rescued probe can no longer fail twice for one
+  noisy reading.
+
 ### Removed
 - `tagText` from `src/lib/demo-link-audit.ts`. It had zero callers in
   `src/`, `tests/` or `scripts/` — re-grepped before deleting, not taken on

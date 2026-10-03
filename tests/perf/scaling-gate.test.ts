@@ -72,14 +72,37 @@
  * already measures 2.09-2.16, so the margin would be inside the noise this
  * harness is built to tolerate. Chasing n^1.5 here would buy a sub-quadratic
  * regression at the cost of a gate that flakes, which is the one thing this
- * file refuses to be.
+ * file refuses to be. (It is fixable a different way, for the functions where
+ * work is observable at all — see the work gate below.)
  *
- * So the gap is recorded rather than papered over. In practice it does not
- * matter much: algorithmic regressions are integer-degree (n^2, n^3), and
- * every one this repo has actually had was n^2 or worse. If a mild
- * sub-quadratic regression ever does appear, the way to catch it is
- * work-counting on that specific function — see `stats().charsParsed` in
- * markdown.ts for how that is done where it mattered — not a tighter ratio.
+ * So the gap is recorded rather than papered over, and the closing move is
+ * not a tighter ratio — it is a different instrument on the functions where a
+ * different instrument is possible.
+ *
+ * TIMING IS A PROXY FOR WORK, AND WHERE WORK IS DIRECTLY OBSERVABLE IT
+ * SHOULD BE COUNTED. `tests/perf-work-counters.test.ts` does that for six
+ * functions whose work is charged in `src/lib/`, and it is strictly more
+ * sensitive than this file on all three axes that matter: its detection
+ * floor is n^1.32 rather than n^1.65 (log2(2.5) against a measured 3.0
+ * limit, with no variance in an integer to hide in); it runs in 33ms on
+ * every `npm test` instead of 93s in a separate CI job; and it cannot flake,
+ * because nothing in it is a clock.
+ *
+ * It also sees something this file structurally cannot. A CONSTANT FACTOR
+ * IS INVISIBLE TO ANY GROWTH MEASUREMENT: doubling the work leaves every
+ * ratio at 2.00, here and in the work gate alike — verified, that mutation is
+ * green in both. Counting catches it exactly, by capping work per input
+ * character. Neither instrument can see work that happens inside a single
+ * regex call, where the characters V8 steps through are not observable from
+ * JavaScript; the work gate names those functions in a test rather than
+ * leaving them to be assumed covered.
+ *
+ * So this file remains the primary gate, because it is the only one that
+ * generalises to a function nobody thought to instrument, and the work gate
+ * is the one to reach for when adding a hot path. Both are required: a
+ * function that is neither timed nor counted is uncovered, and
+ * `tests/perf-tracked-surface.test.ts` is what stops that from happening by
+ * accident.
  *
  * WHY BEST-OF-N AND NOT THE MEAN: the noise in a single timing sample is
  * one-sided — a GC pause, a descheduled worker, another job on the runner can
@@ -355,6 +378,13 @@ type Probe = {
    * superlinear finding in `auditDemoLinks`.
    */
   inputSize: (n: number) => number;
+  /**
+   * If the work this probe drives is directly observable, add the function to
+   * `COUNTED` in tests/perf-work-counters.test.ts as well. Counting beats
+   * timing on every axis that matters (see the header) and costs nothing to
+   * run; the only functions that cannot be counted are the ones whose work
+   * lives inside a single regex call.
+   */
   /**
    * Proves the probe is still doing work at `n`. Without it, a probe whose
    * regex stopped matching (or whose early-return now short-circuits) would
@@ -862,7 +892,7 @@ const PROBES: Probe[] = [
       const text = rep("prose\n```anybase\n<p>x</p>\n```\nmore prose\n", n);
       return () => void stripCodeBlocks(text);
     },
-    inputSize: (n) => 36 * n,
+    inputSize: (n) => 41 * n,
     assertLive: (n) => {
       expect(stripCodeBlocks(rep("prose\n```anybase\n<p>x</p>\n```\n", n))).not.toContain("anybase");
     },

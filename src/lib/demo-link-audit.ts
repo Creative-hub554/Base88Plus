@@ -95,11 +95,6 @@ export function forEachTagRun(
   }
 }
 
-/** The tag text for a span, for callers that need it as a string. */
-export function tagText(html: string, tag: TagSpan): string {
-  return html.slice(tag.start, tag.end);
-}
-
 /**
  * Index of the next `</a>` in any case at or after `from`, or -1.
  * Exported because the sanitiser's relinker needs the same search.

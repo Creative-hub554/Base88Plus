@@ -66,7 +66,15 @@ const TRACKED_MODULES = [
  *  - COUNTED, not timed. Something deterministic already pins the work, which
  *    is a stronger claim than a timing ratio and cannot flake. The streaming
  *    markdown parser is the important case: it runs on every token of every
- *    reply and is pinned by counting characters parsed.
+ *    reply and is pinned by counting characters parsed. Since #120 there is a
+ *    second counting mechanism, `tests/perf-work-counters.test.ts`, which pins
+ *    growth AND constant factors for six more functions — but every one of
+ *    those is ALSO timing-probed by the gate, so none of them belongs in this
+ *    ledger. It is a second opinion on functions already listed, not a
+ *    substitute for being listed. The two counting mechanisms are not
+ *    interchangeable: `stats().charsParsed` is an intrinsic part of the
+ *    streaming parser's own API, while the work counter is an opt-in
+ *    instrument charged at scan exits in the functions it covers.
  *  - REACHED, not probed. The function sits in the inner loop of a function
  *    the gate already probes, so a regression here moves that probe's ratio.
  *  - NOT INPUT-PROPORTIONAL. It cannot grow superlinearly in its argument, so
@@ -91,10 +99,6 @@ const LEDGER = new Map<string, string>([
   ],
 
   // ---- reached by an existing probe, in its inner loop ----
-  [
-    "tagText",
-    "UNCALLED: zero callers in src/, tests/ or scripts/ — checked by grep while writing this ledger, after an earlier draft here claimed textBetween called it and was wrong. Dead code; delete it",
-  ],
   [
     "indexOfCloseAnchor",
     "REACHED: called per placeholder anchor inside the sanitizeDemoFiles nav probe, which is gated",

@@ -12,7 +12,71 @@ process. Download zips: the
 
 ## [Unreleased]
 
+### Removed
+- `tagText` from `src/lib/demo-link-audit.ts`. It had zero callers in
+  `src/`, `tests/` or `scripts/` — re-grepped before deleting, not taken on
+  the ledger's word. It existed only as an entry in the perf ledger, filed
+  under `UNCALLED`, which is a category for deletion candidates rather than
+  an endorsement. A guard that lists dead code as tracked is worse than one
+  that misses it: it makes the list look longer than the coverage.
+
 ### Added
+- A deterministic work gate: six hot paths are now pinned by COUNTING the
+  characters they scan, not by timing them, which catches a regression the
+  timing gate provably cannot see and one it structurally never will.
+
+  The superlinearity gate measures wall-clock time, because that is the only
+  thing that generalises across a corpus of functions. But time is a proxy
+  for work, and where work is directly observable the proxy has two measured
+  costs. A regression to **n^1.5** reads 2.70 against the timing gate's 3.00
+  limit and passes — its detection floor is about n^1.65, and lowering the
+  limit cannot help because a linear function already measures 2.09-2.16.
+  And the *cheapest* functions are the least reliable: `extractFiles` costs
+  ~23 microseconds per call and once read 3.22 against that same limit, on a
+  function a focused 64x-ladder measurement put at 2.40. It was linear. The
+  gate was wrong.
+
+  `src/lib/perf-counter.ts` adds the instrument the repo already had a
+  precedent for — `stats().charsParsed` counts characters in the streaming
+  parser, which is how the #114 regression was caught — and generalises it.
+  Six functions charge their scans: `parseInline` (the #113 shape, where the
+  count is *exactly* 4n-1 with the closer memo and n-squared without it),
+  `extractFiles`, `extractPartialFiles` on every streamed token,
+  `stripCodeBlocks` and `localRefsFromHtml`.
+
+  Counting is better on all three axes that matter:
+
+  - **Sensitivity.** Its floor is n^1.32 (log2 of its 2.5 limit) against the
+    timing gate's measured n^1.65, because an integer count has no variance
+    to hide in. n^1.5 is caught. The gap is halved, not closed: n^1.25 still
+    passes, and a test says so rather than letting the file imply otherwise.
+  - **Speed.** 33ms on every `npm test`, against 93s in a separate CI job,
+    and it cannot flake because nothing in it is a clock.
+  - **A class of regression neither growth measure can see.** A *constant
+    factor* is invisible to any ratio: double the work and every ratio stays
+    at 2.00. Verified — that mutation is green in both gates. So each entry
+    also caps work per input character, which catches it exactly.
+
+  The instrument costs the product nothing measurable. Charging per character
+  cost 2ns each and read +6.8% on the `parseInline` hot loop; charging per
+  match cost 19ns each and read +10.9% on `localRefsFromHtml`. Both were
+  measured against a baseline and restructured to accumulate in a local and
+  charge once per call. For scale, measuring the *same build* twice varied by
+  7.5% on `stripCodeBlocks` — the noise is larger than the effect.
+
+  Teeth, each verified by deliberately reintroducing it: removing the #113
+  closer memo reads 3.96 against the 2.5 limit; a second scan in
+  `extractFiles` reads 3.72 units per input character over its 3.6 cap; a
+  deleted charge site reads zero and is caught by the exact-count pins.
+  `parseInline` on unclosed brackets is pinned to the exact integer 4n-1, so
+  the #113 fix is now a fact about arithmetic rather than a timing ratio.
+
+  What it cannot do is written down rather than left to be assumed: work that
+  happens inside a single regex call is not observable from JavaScript, so
+  `isEmptyFenceOutput`, `shouldOfferContinue` and `isSummaryImitation` stay on
+  the timing gate, and a test pins that fact so nobody assumes cover that is
+  not there.
+
 - The superlinearity gate now reports its full measured envelope on every run,
   and writes it to the GitHub step summary so each build leaves a durable
   record of what the instrument actually measured.

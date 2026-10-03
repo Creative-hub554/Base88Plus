@@ -45,6 +45,8 @@
  * raw HTML, setext headings, and inline HTML of any kind.
  */
 
+import { chargeWork } from "./perf-counter";
+
 // ---------------------------------------------------------------------------
 // Types — the allowlist. A node kind not in this union cannot be rendered.
 // ---------------------------------------------------------------------------
@@ -193,8 +195,16 @@ function findCloser(text: string, from: number, closer: string): number {
       i += 1;
       continue;
     }
-    if (text[i] === closer) return i;
+    if (text[i] === closer) {
+      chargeWork(i - from + 1);
+      return i;
+    }
   }
+  // The whole remainder was scanned and held nothing: this is the charge
+  // that made #113 visible. Without the memo above, `findCloser` returns -1
+  // once per `[`, and this line is reached n times over an n-character
+  // string, so the total climbs as n-squared.
+  chargeWork(text.length - from);
   return -1;
 }
 
@@ -253,8 +263,12 @@ function findCloserPair(text: string, from: number, closer: string, run: number)
         break;
       }
     }
-    if (matched) return i;
+    if (matched) {
+      chargeWork(i - from + 1);
+      return i;
+    }
   }
+  chargeWork(text.length - from + 1);
   return -1;
 }
 
@@ -405,6 +419,16 @@ export function parseInline(text: string): Inline[] {
   }
 
   flush();
+  // One charge for the outer pass, as an UPPER BOUND on it: `i` only ever
+  // increases, so the loop visits at most one position per character. The
+  // part of this function that can actually revisit text is the nested
+  // closer scans, and those are charged exactly, at their own exits.
+  //
+  // Charged ONCE here rather than accumulated per iteration on purpose:
+  // measured, an increment in this loop costs 2ns per character and read
+  // +6.8% on a many-links input, which is too much to pay for an
+  // instrument that exists only for tests.
+  chargeWork(text.length);
   return out;
 }
 

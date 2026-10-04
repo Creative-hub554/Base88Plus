@@ -34,6 +34,16 @@ on:
 permissions:
   contents: read
   actions: read
+  # scripts/verify-oct3.ps1 records the verdict as a comment on #18. Without
+  # this the POST returns 403 "Resource not accessible by integration" - which
+  # is exactly what happened on 2026-10-03, the one day this workflow had ever
+  # fired: the verifier computed PASS_REFRESHED, failed to record it, printed
+  # COMMENT_FAILED, and exited 0, so the only surviving copy of a real verdict
+  # was a log that expires in 90 days. Every sibling that posts to #18
+  # (heartbeat, oct28-verify, oct29-sentinel, oct4-sentinel, verifier-drill)
+  # already declared issues: write; this file was the sole omission, and the
+  # schedule auditor now checks the receipt so it cannot recur silently.
+  issues: write
 
 concurrency:
   group: oct3-verify

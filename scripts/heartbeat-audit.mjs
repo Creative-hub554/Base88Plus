@@ -4,7 +4,7 @@
 // is caught within days, all year - not just by the date-specific sentinels
 // on their single morning after.
 //
-// Per workflow with a `schedule:` trigger, four checks:
+// Per workflow with a `schedule:` trigger, five checks:
 //   1. API state   - state must be `active`; disabled_inactivity /
 //                    disabled_manually is an instant finding (this is the
 //                    60-day-rule tripwire the cron-day verifiers cannot give).
@@ -29,6 +29,13 @@
 //                    has fired before is quoted its own measured lag, a
 //                    schedule with no run ever recorded is called out as the
 //                    60-day signature, so patience is never silent.
+//   5. Receipt     - a run that STARTED is not a verdict that LANDED. Every
+//                    workflow in RECEIPTS promises a durable record on the
+//                    issue, so the promised marker must actually be there for
+//                    this period. A green run whose verdict failed to post is
+//                    a finding, not a pass: silence is the failure this whole
+//                    file exists to catch, and on 2026-10-03 that failure
+//                    arrived wearing a green checkmark.
 //
 // This script audits ITSELF too: heartbeat.yml's own cron is in the audited
 // set, so a dead heartbeat is caught by the drill/CI surface instead of
@@ -188,6 +195,76 @@ export function gradeSlot({ baseline, lastDueMs, nowMs, floorMs }) {
   return { verdict: 'within-history', ...shared };
 }
 
+// When a receipt for this period must have been posted: the first due slot,
+// falling back to now when the workflow has never been due. A receipt is about
+// the whole period, so the boundary is the period's opening, not the slot being
+// graded - see the Oct 28 four-retry case.
+export function periodStart(slotsMs, nowMs) {
+  return slotsMs.length ? slotsMs[0] : nowMs;
+}
+
+// Which rows actually need a receipt check: one per RUN, not one per cron.
+//
+// A workflow's runs are workflow-level, so the Oct 3 chain's three retries all
+// match the same run and would otherwise file the same lost verdict three times
+// on #18 - and a reader who has seen the same paragraph three times learns to
+// skip it. Runs still in progress are excluded: they may not have posted yet.
+export function receiptTargets(rows) {
+  const seen = new Set();
+  const targets = [];
+  for (const r of rows) {
+    if (!r.receipt || !r.okRun || r.okRun.status !== 'completed') continue;
+    if (seen.has(r.okRun.id)) continue;
+    seen.add(r.okRun.id);
+    targets.push(r);
+  }
+  return targets;
+}
+
+// Where a row's outcome belongs in the report. assessReceipt says WHAT is
+// true; this says how loudly to say it, and main() cannot be tested without a
+// GitHub token, so the routing would otherwise be the one untested line in the
+// chain that produces the finding this whole file exists for.
+export function reportAs(ra) {
+  if (ra.finding) return 'finding';
+  if (ra.note) return 'note';
+  return 'silent';
+}
+
+// The wiring decision, extracted so it is testable at all.
+//
+// gradeReceipt answers "is the record there?"; this answers "does that matter
+// for THIS run?", which is a separate question with its own traps:
+//   - no contract -> nobody was promised anything, stay quiet;
+//   - run not completed -> it may not have posted yet, and racing your own
+//     subject manufactures false findings;
+//   - receipted -> say where it landed, so the verdict is findable;
+//   - otherwise -> the finding, and the finding is the whole point.
+//
+// Returning the text rather than pushing it into a findings[] array keeps the
+// word choice pinned: this sentence is the alert a human reads about a lost
+// verdict, and it should not be able to rot untested.
+export function assessReceipt({ contract, run, comments, periodStartMs }) {
+  if (!contract) return { verdict: 'no-contract' };
+  if (!run || run.status !== 'completed') return { verdict: 'run-incomplete' };
+  const g = gradeReceipt(contract.marker, comments, periodStartMs);
+  if (g.verdict === 'receipted') {
+    return {
+      verdict: 'receipted',
+      note: `recorded ${contract.what} on #${ISSUE} (comment ${g.first.id}, ${g.first.created_at}).`,
+    };
+  }
+  return {
+    verdict: 'unrecorded',
+    finding: `DID run - run ${run.id} finished \`${run.conclusion}\` - but ${contract.what} was ` +
+      `never recorded on #${ISSUE} (no comment carrying \`${contract.marker}\` since ` +
+      `${new Date(periodStartMs).toISOString()}). A green run is not a verdict: the schedule is ` +
+      `alive and the RECORD is dead. The run's own log is the only copy and workflow logs expire, ` +
+      `so treat this as a lost result and re-run the verifier by hand (\`workflow_dispatch\`, smoke ` +
+      `input where one exists) rather than trusting the conclusion.`,
+  };
+}
+
 // Human-readable lag for the note. Minutes are the useful unit here: this
 // repo's schedule lag is hours, and '8h26m' says what '30200000ms' hides.
 export function formatLag(ms) {
@@ -196,6 +273,63 @@ export function formatLag(ms) {
   const h = Math.floor(mins / 60);
   const m = mins % 60;
   return h ? `${h}h${String(m).padStart(2, '0')}m` : `${m}m`;
+}
+
+// ---------------------------------------------------------------------------
+// Receipts: a run that started is not a verdict that landed.
+//
+// Everything above answers "did a scheduled run appear?". That is necessary and
+// it is not sufficient, and the 2026-10-03 cron day is why. The three Oct 3
+// crons fired for the first time ever - ~5h and ~14h late, so the schedule
+// model correctly called them healthy - and the run finished GREEN while
+// recording nothing anywhere: verify-oct3.ps1 computed VERDICT=PASS_REFRESHED,
+// its POST /issues/18/comments returned 403 "Resource not accessible by
+// integration", the script printed COMMENT_FAILED and then exited 0 on the
+// strength of the PASS it had failed to record. Every layer of this auditor
+// read that run as proof of life. The verdict existed only in a workflow log
+// that expires in 90 days.
+//
+// Silence is the failure this whole file exists to catch, and that failure did
+// not arrive as silence. It arrived wearing a green checkmark. So each workflow
+// that PROMISES a durable record declares the marker it promises, and a run
+// that starts without leaving that marker is a finding in its own right -
+// the loudest kind, because nothing else in the repo will ever say it.
+//
+// Deliberately absent: oct4-sentinel and oct29-sentinel post ONLY when they
+// trip. A sentinel that returns SATISFIED is silent by design, so giving one a
+// receipt would manufacture a permanent false positive. Absence from this table
+// is a real claim - "this workflow owes nobody a record" - not an oversight.
+export const RECEIPTS = {
+  'oct3-verify.yml': { marker: 'post-Oct-3 verifier', what: 'the Oct 3 verdict' },
+  'oct28-verify.yml': { marker: 'post-Oct-28 verifier', what: 'the Oct 28 promotion verdict' },
+};
+
+// Did the promised record actually land, for the period this audit covers?
+//
+// `comments` is every comment on the record issue, unfiltered; the two tests
+// that matter are the marker (this workflow kept its promise) and the window
+// (it kept it about THIS period, not about a day last month).
+//
+// The window starts at the FIRST due slot of the period, not the most recent
+// one. The Oct 28 chain declares four retries for one morning: a verdict
+// recorded by the 07:23 attempt must still count when the 19:33 attempt is the
+// one being audited, or every retry would read as an unrecorded verdict. The
+// per-cron `lastDue` is the wrong boundary for a receipt - a receipt is about
+// the whole day, a slot is about one moment.
+//
+// Pure and comment-shaped so it is testable without the Issues API.
+export function gradeReceipt(marker, comments, periodStartMs) {
+  if (!marker) return { verdict: 'no-contract' };
+  const landed = [];
+  for (const c of comments) {
+    if (!c || typeof c.body !== 'string' || !c.body.includes(marker)) continue;
+    const at = Date.parse(c.created_at);
+    if (Number.isNaN(at) || at < periodStartMs) continue; // about some other day
+    landed.push({ id: c.id, created_at: c.created_at });
+  }
+  if (landed.length === 0) return { verdict: 'unrecorded' };
+  landed.sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+  return { verdict: 'receipted', count: landed.length, first: landed[0] };
 }
 
 // ---------------------------------------------------------------- cron math
@@ -399,6 +533,11 @@ async function main() {
     // workflow has been measured.
     const slotsMs = slotsBetween(parsed.map((p) => p.c), createdMs, now);
     const baseline = scheduleBaseline(slotsMs, runStarts);
+    // First due slot of the period: the boundary a receipt must post after.
+    // FIRST, not last - the Oct 28 chain declares four retries for one morning
+    // and a verdict posted by the 07:23 attempt must still count when the
+    // 19:33 slot is the one under audit.
+    const periodStartMs = periodStart(slotsMs, now);
     if (baseline.worstLagMs !== null) {
       globalWorstLagMs = globalWorstLagMs === null ? baseline.worstLagMs : Math.max(globalWorstLagMs, baseline.worstLagMs);
     }
@@ -415,7 +554,13 @@ async function main() {
         notes.push(`\`${label}\` cron \`${expr}\` has never been due yet (next fire ~${nn}; workflow created ${wf.created_at.slice(0, 10)}) - nothing to audit until then.`);
         continue;
       }
-      rows.push({ label, expr, lastDue, baseline, runObjs });
+      rows.push({
+        label, expr, lastDue, baseline, runObjs, periodStartMs,
+        receipt: RECEIPTS[wf.path.split('/').pop()] || null,
+        // Resolved here, not in pass 2, so `receiptTargets` below can be a pure
+        // function of the rows rather than a loop the tests cannot reach.
+        okRun: runObjs.find((r) => Date.parse(r.run_started_at || r.created_at) >= lastDue) || null,
+      });
     }
   }
 
@@ -428,16 +573,38 @@ async function main() {
     : Math.max(Math.round(globalWorstLagMs * GRACE_HEADROOM), ABSOLUTE_FLOOR_MS);
 
   // ---- PASS 2: judge.
-  for (const { label, expr, lastDue, baseline, runObjs } of rows) {
+  // #18 comments are fetched at most once, and only if some row could need
+  // them. A healthy audit of event-driven workflows must not pay for an
+  // Issues call it will never read.
+  let recordComments = null;
+  const comments = async () => {
+    if (recordComments === null) {
+      recordComments = await api(`/issues/${ISSUE}/comments?per_page=100`);
+      if (!Array.isArray(recordComments)) recordComments = [];
+    }
+    return recordComments;
+  };
+  const receiptRows = receiptTargets(rows);
+  for (const row of rows) {
+    const { label, expr, lastDue, baseline, periodStartMs, receipt } = row;
     const dueIso = new Date(lastDue).toISOString();
     // Any scheduled attempt started at/after the due instant counts:
     // completed (any conclusion - a RED run is still evidence the schedule
     // fired) or in progress (cron-day mornings). Runs from the previous slot
     // started before lastDue and are excluded by the comparison.
-    const okRun = runObjs.find((r) => Date.parse(r.run_started_at || r.created_at) >= lastDue);
+    const okRun = row.okRun;
     if (okRun) {
       const state = okRun.status === 'completed' ? okRun.conclusion : 'in progress';
       notes.push(`\`${label}\` cron \`${expr}\` last due ${dueIso} -> run ${okRun.id} ${state} (started ${okRun.run_started_at || okRun.created_at}).`);
+      // A run that is still going may not have posted yet; asking now would
+      // be the auditor racing its own subject. Only a COMPLETED run owes us a
+      // receipt, and only a workflow that promised one in the first place.
+      const ra = receiptRows.includes(row)
+        ? assessReceipt({ contract: receipt, run: okRun, comments: await comments(), periodStartMs })
+        : { verdict: 'run-incomplete' };
+      const where = reportAs(ra);
+      if (where === 'finding') findings.push(`\`${label}\` cron \`${expr}\` ${ra.finding}`);
+      else if (where === 'note') notes.push(`\`${label}\` ${ra.note}`);
       continue;
     }
 
@@ -468,7 +635,9 @@ async function main() {
 
   // ------------------------------------------------------------------ report
   const stamp = new Date(now).toISOString().slice(0, 10);
-  console.log(`HEARTBEAT_AUDIT ${stamp} workflows=${scheduled.length} findings=${findings.length}`);
+  const receipted = rows.filter((r) => r.receipt).length;
+  console.log(`HEARTBEAT_AUDIT ${stamp} workflows=${scheduled.length} findings=${findings.length} ` +
+    `receipt_contracts=${receipted}/${rows.length}`);
   for (const n of notes) console.log(`  ok   ${n}`);
   for (const f of findings) console.log(`  DEAD ${f}`);
 

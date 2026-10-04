@@ -12,6 +12,49 @@ process. Download zips: the
 
 ## [Unreleased]
 
+### Fixed
+- **`oct3-verify.yml` was missing the `issues: write` scope its own script needs.**
+
+  The Oct 3 cron day is how this was found, and it is the first day the
+  workflow had ever fired. All three crons came due on 2026-10-03 and all three
+  ran (`37157439771`, green) - which was already better than the week before,
+  when none of them had fired at all. But `verify-oct3.ps1` records its verdict
+  by commenting on issue #18, and `oct3-verify.yml` was the only workflow in
+  the repo that posts there without declaring `issues: write`. The POST came
+  back `403 "Resource not accessible by integration"`; the script printed
+  `COMMENT_FAILED` and then exited 0 on the strength of the
+  `VERDICT=PASS_REFRESHED` it had just failed to record.
+
+  So the run was green, the verdict was real, and the only copy of it was a
+  workflow log that expires in 90 days. Every sibling that posts to #18
+  (heartbeat, oct28-verify, oct29-sentinel, oct4-sentinel, verifier-drill)
+  already declared the scope; this file was the lone omission.
+
+### Changed
+- **The schedule heartbeat now checks that a verdict LANDED, not just that a run STARTED.**
+
+  The auditor's model - per-schedule patience derived from each schedule's own
+  observed lag - answers "did a scheduled run appear?". That is necessary and
+  it is not sufficient, and the 2026-10-03 cron day proved it: the schedule
+  fired, the run went green, and nothing anywhere recorded the verdict. Silence
+  is the failure this whole layer exists to catch, and that failure did not
+  arrive as silence. It arrived wearing a green checkmark, and every check in
+  the model read it as proof of life.
+
+  Each workflow that promises a durable record now declares it, and a completed
+  run that leaves no such record is a finding in its own right - the loud kind,
+  because nothing else in the repo will ever say it. Two properties keep it
+  honest: the window opens at the period's **first** due slot (the Oct 28 chain
+  declares four retries for one morning, and grading the last retry against the
+  last slot would discard the verdict the first attempt already recorded), and
+  the sentinels are deliberately **absent** from the table (they post only when
+  they trip, so a satisfied sentinel is silent by design - auditing one would
+  file a permanent false finding).
+
+  The live dry run against the real repo now reports the lost Oct 3 verdict as
+  a single finding, named with the run that lost it. 53 pins in
+  `tests/heartbeat-schedule-grace.test.ts`, mutation-verified.
+
 ### Changed
 - **The schedule heartbeat now judges each schedule against its own history.**
 

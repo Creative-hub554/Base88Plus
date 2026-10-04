@@ -295,7 +295,7 @@ that assumption is the whole design.
 ### Weekly heartbeat recipe (`heartbeat.yml` + `scripts/heartbeat-audit.mjs`)
 
 Mondays 07:53 UTC; zero dependencies (hand-rolled cron math + YAML scanner,
-25 unit tests). Per scheduled workflow: API `state == active`; every
+53 unit tests). Per scheduled workflow: API `state == active`; every
 `schedule:` cron line parses; forward-satisfiable within **1500 days** (a
 full leap cycle — 400 misses Feb-29 crons half the time); the most recent
 **due** fire has a scheduled run at/after it (a run starts AT the due
@@ -305,9 +305,38 @@ date-gated chains are `NOT_YET_DUE` before their first fire, never falsely
 dead. Findings → exit 1 + one deduped comment on #18 (8-day window);
 healthy → exit 0 silent. The heartbeat audits its own cron too, and excludes
 GitHub's synthetic `dynamic/dependabot/...` workflow entry (no file).
-Rehearse with the `dry_run` dispatch input; extend by adding crons —the auditor picks them up automatically.
+Rehearse with the `dry_run` dispatch input; extend by adding crons —
+the auditor picks them up automatically.
 
-**Landmines (each cost a debugging cycle once):** cron single values are
+**The receipt check — a green run is not a verdict.** For every workflow listed
+in `RECEIPTS` (currently `oct3-verify.yml`, `oct28-verify.yml`), a *completed*
+run must have left its promised marker on #18 for the current period. Added
+after the 2026-10-03 cron day: all three Oct 3 crons fired for the first time
+ever, and run `37157439771` finished **green** while recording nothing anywhere
+— `verify-oct3.ps1` computed `VERDICT=PASS_REFRESHED`, its POST to #18 came
+back **403 "Resource not accessible by integration"**, it printed
+`COMMENT_FAILED`, and then exited 0 on the strength of the PASS it had failed to
+record. The only surviving copy was a workflow log that expires in 90 days.
+
+Two properties make the check honest rather than noisy:
+
+- the window opens at the period's **first** due slot, not the slot being
+  graded — `oct28-verify` declares four retries for one morning, and grading
+  the 19:33 attempt against 19:33 would discard the verdict the 07:23 attempt
+  already recorded;
+- the sentinels (`oct4`, `oct29`) are deliberately **absent** from `RECEIPTS`.
+  They post only when they trip, so a satisfied sentinel is silent by design;
+  auditing one would file a permanent false finding. Absence from the table is
+  the claim "this workflow owes nobody a record".
+
+Adding a workflow that records on #18? Add it to `RECEIPTS` *and* grant it
+`issues: write`. A drift pin checks both — every contract has the permission,
+and no workflow in `.github/workflows/` posts to #18 without it. That pin is
+why `oct3-verify.yml`'s missing scope cannot recur silently.
+
+**Landmines (each cost a debugging cycle once):** a scheduled run's green
+conclusion says the SCRIPT ran, not that it RECORDED anything — check the
+receipt, not the checkmark; cron single values are
 single values — `53` is 53, not vixie 53-max (only `a/s` means `a-max/s`);
 the next-fire walk must INCLUDE the start day (later-today slots count);
 comment lines INSIDE a `schedule:` block must not reset a line-scanner's

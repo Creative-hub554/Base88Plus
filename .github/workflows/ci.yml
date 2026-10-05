@@ -183,7 +183,7 @@ jobs:
       # "step died before recording" loud instead of silently absent.
       - name: Export the snapshot push status as a run artifact
         if: always() && steps.commit.outcome != 'skipped'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: snapshot-push-${{ steps.commit.outputs.push || 'unknown' }}
           path: snapshot-push-status.txt
@@ -372,7 +372,7 @@ jobs:
       # `always()`: a FAILED measurement is the one most worth keeping.
       - name: Archive the measured envelope
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: perf-envelope-node${{ matrix.node }}-${{ github.run_id }}
           path: perf-envelope-node${{ matrix.node }}.txt

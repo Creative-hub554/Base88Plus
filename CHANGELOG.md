@@ -13,6 +13,35 @@ process. Download zips: the
 ## [Unreleased]
 
 ### Fixed
+- **A sentinel that fired was being reported as healthy.**
+
+  Run 37183204922 - the Oct 4 sentinel, concluded `failure` at 2026-10-04T06:34:35Z
+  because the Oct 3 chain had recorded no receipt - was graded `ok` by the
+  weekly heartbeat. The rule behind that was deliberate and still correct for
+  its own question: "a RED run is still evidence the schedule fired". It is the
+  right rule for liveness and the wrong one here, because `oct4-sentinel.yml`
+  ends its happy path with `SENTINEL TRIPPED - gap posted on issue #18"; exit 1`.
+  For a sentinel, red is not a failure to run - it **is** the report.
+
+  So the loudest signal the repo produces was being discarded by the one job
+  whose job is to notice signals. A sentinel that fires has proven two things:
+  the schedule is alive, and the condition it watches is present right now. Only
+  the second is worth a finding.
+
+  `assessTrip` now answers the third question a scheduled run can ask. A
+  workflow listed in `TRIPPERS` that concludes non-success files a finding naming
+  the run and the gap; a clean one is a note saying what it watched. The
+  auditor reports **2 findings** against the real repo today where it reported 1.
+
+  Deliberately excluded: the verifier workflows. `oct3`/`oct28-verify` exit 0
+  even when they fail to record (the #129 bug), so their conclusion carries no
+  signal either way - `RECEIPTS` is the contract that holds them to account.
+
+  63 pins in `tests/heartbeat-schedule-grace.test.ts` (was 53), mutation-verified
+  7/7. Three mutations survived the first pass - `assessTrip` is pure and fully
+  pinned, which is exactly why nothing asserted that `main()` hands it the
+  contract or reports what comes back. Those are pinned now, structurally, the
+  same shape this file already uses for the CI permission guard.
 - **Three cron comments sat glued to their values, and nothing could see it.**
 
   `oct3-verify.yml` line 26 and `oct28-verify.yml` lines 24 and 25 each read

@@ -456,3 +456,12 @@ Exit 0 when every workflow holds, 1 otherwise, with per-file line numbers.
 - **A cron that fires late is not a broken cron.** The schedule heartbeat judges
   those separately (playbook 6); `check:workflows` only asks whether the
   expression is one GitHub will run at all.
+
+- **A tripped sentinel is a VERDICT, not a dead cron.** The schedule model
+  treats any completed run as proof the schedule fired, which is right for
+  liveness and wrong for a witness: `oct4-sentinel.yml` exits 1 precisely when
+  it posts a gap. Those workflows are listed in `TRIPPERS`, and a non-success
+  conclusion on one files a finding. A sentinel that fires has proven the
+  schedule is alive *and* that the gap is present - only the second is news.
+  The mirror of #129: a green run is not a verdict, and here a red run is
+  exactly one.

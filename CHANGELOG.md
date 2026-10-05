@@ -13,6 +13,48 @@ process. Download zips: the
 ## [Unreleased]
 
 ### Fixed
+- **Three cron comments sat glued to their values, and nothing could see it.**
+
+  `oct3-verify.yml` line 26 and `oct28-verify.yml` lines 24 and 25 each read
+  `'17 19 3 10 *'# evening backstop` - a comment with no separating space,
+  present since #58. GitHub's parser tolerates them, so the crons still fire and
+  every workflow keeps running; a strict YAML reader calls it `MISSING_CHAR`.
+
+  It survived because of a gap with a name now: **no gate inspects the workflow
+  files.** Every check in this repo reads code, so a malformed workflow merges
+  with all legs green - nine green CI legs said nothing at all about whether the
+  files defining them were valid.
+
+- **A new gate now parses every workflow file, and it is wired into `ci-ok`.**
+
+  `scripts/check-workflows.mjs` (`npm run check:workflows`) runs three checks on
+  the **parsed** document rather than the text: the file parses with unique keys
+  and strict comment separation; every `on.schedule[].cron` is five fields in
+  range; and every workflow that posts an issue comment holds the scope that
+  lets it. It runs as a step in the shared `gates-steps` action, so the blocking
+  gates job and the canary run it and cannot drift apart, and `ci-ok` - already
+  the required check - needs no branch-protection change.
+
+  The cron check earns its place on its own: GitHub **silently ignores** a cron
+  it cannot parse. No error, no run, no notification. A typo'd cron is a
+  scheduled job that does not exist, which is the same silent death as the
+  missing `issues: write` above.
+
+  Permission resolution is parsed rather than grepped, and that is a strictly
+  stronger question than the existing text guard in
+  `tests/heartbeat-schedule-grace.test.ts`: a job-level `permissions` block
+  **replaces** the workflow-level one rather than merging with it, so a job is
+  judged by the permissions GitHub actually applies to it. A grant held only by
+  a sibling job does not count.
+
+  One file can report every defect at once. A glued comment still parses, so the
+  tree is kept and the cron and permission checks still run - otherwise fixing
+  one typo per CI run is the tax for three typos in one file.
+
+  34 pins in `tests/workflow-contract.test.ts`, including four that the gate is
+  actually wired into the blocking chain. Mutation-verified: 14 logic mutations
+  and 2 wiring mutations, all 16 killed.
+
 - **`oct3-verify.yml` was missing the `issues: write` scope its own script needs.**
 
   The Oct 3 cron day is how this was found, and it is the first day the

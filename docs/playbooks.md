@@ -396,3 +396,63 @@ Verify with the per-surface suites (`tests/inline-meta-edit.test.tsx`,
 `tests/project-card-description.test.tsx`,
 `tests/project-card-tags.test.tsx`) — the behavior-preservation proof is
 existing suites passing UNCHANGED when the layer is refactored.
+---
+
+## 8. Workflow changes (`npm run check:workflows`)
+
+### Why this gate exists
+
+Editing a file in `.github/workflows/` is the only routine change in this repo
+that **no existing gate could see**. Everything else is code, and every gate
+reads code. So a malformed workflow merged cleanly with nine green CI legs — a
+green run that was not a verdict, the same failure class as the lost Oct 3
+verdict.
+
+The proof it was real: `oct3-verify.yml` line 26 and `oct28-verify.yml` lines
+24–25 carried comments glued to a quoted cron since #58 —
+
+```yaml
+    - cron: '17 19 3 10 *'# Oct 3, 19:17 UTC - evening backstop
+```
+
+One missing space each. GitHub's parser tolerates it, so the crons kept firing
+and nothing complained. A strict YAML reader reports `MISSING_CHAR`. Three
+characters, invisible for weeks.
+
+### The recipe
+
+1. Edit the workflow.
+2. `npm run check:workflows` — three checks on the **parsed** document:
+   - **parses** with `uniqueKeys` and strict comment separation. Catches glued
+     comments and duplicate keys (a lenient parser silently keeps the last
+     value, so a duplicated cron or a mistyped permission is invisible in the
+     run list).
+   - **every cron is five fields, in range.** GitHub **silently ignores** a
+     cron it cannot parse: no error, no run, no notification. This is the check
+     worth having even when nothing is malformed, because the failure mode has
+     no symptom at all.
+   - **every comment poster is permitted**, resolved from the tree.
+3. `npm test` — 34 pins in `tests/workflow-contract.test.ts`.
+
+Exit 0 when every workflow holds, 1 otherwise, with per-file line numbers.
+
+### Landmines
+
+- **A job-level `permissions` block REPLACES the workflow-level one; it does not
+  merge.** So a job that declares its own block is judged by that block alone,
+  and a grant held only by a sibling job does not cover it. The text-grep guard
+  in `tests/heartbeat-schedule-grace.test.ts` cannot express this — it answers
+  the weaker question, which is why both exist.
+- **A glued comment still parses.** The gate keeps the tree and still runs the
+  cron and permission checks, so one file reports every defect at once. If it
+  stopped at the parse error, three typos in one file would cost three CI runs
+  to fix.
+- **The gate only bites if it is wired in.** Four pins assert the step sits in
+  `.github/actions/gates-steps/action.yml` before the tests, and that `ci-ok`
+  still needs `gates`. Delete the step and every other pin still passes.
+- **`on` is a string key, not YAML 1.1's boolean `true`.** A pin asserts it. If
+  it ever flips, every trigger lookup finds nothing and the gate passes
+  *vacuously* on every file — green, and checking nothing.
+- **A cron that fires late is not a broken cron.** The schedule heartbeat judges
+  those separately (playbook 6); `check:workflows` only asks whether the
+  expression is one GitHub will run at all.

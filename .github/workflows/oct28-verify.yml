@@ -21,8 +21,8 @@ on:
   schedule:
     - cron: '23 7 28 10 *' # Oct 28, 07:23 UTC - before the operator's dispatch
     - cron: '33 9 28 10 *' # Oct 28, 09:33 UTC - after a typical morning dispatch
-    - cron: '33 13 28 10 *'# Oct 28, 13:33 UTC - midday retry
-    - cron: '33 19 28 10 *'# Oct 28, 19:33 UTC - evening backstop
+    - cron: '33 13 28 10 *' # Oct 28, 13:33 UTC - midday retry
+    - cron: '33 19 28 10 *' # Oct 28, 19:33 UTC - evening backstop
   workflow_dispatch:
     inputs:
       smoke:

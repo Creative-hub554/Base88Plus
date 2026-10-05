@@ -1,9 +1,9 @@
 name: gates-steps
 description: >
-  The shared gate sequence (install, node-contract check, typecheck, lint,
-  tests). Used by BOTH the blocking gates job and the non-blocking canary
-  job so they can never drift apart. Expects the repo to be checked out
-  and Node to be set up already.
+  The shared gate sequence (install, node-contract check, workflow-contract
+  check, typecheck, lint, tests, generated-app pins). Used by BOTH the
+  blocking gates job and the non-blocking canary job so they can never drift
+  apart. Expects the repo to be checked out and Node to be set up already.
 runs:
   using: composite
   steps:
@@ -17,6 +17,15 @@ runs:
     - name: Node version contract
       shell: bash
       run: npm run check:node
+
+    # Workflow contract: every workflow file parses, every cron is
+    # well-formed, and every workflow that posts an issue comment is
+    # permitted to. Every other gate inspects CODE, so without this a
+    # malformed workflow merges with all legs green — and a cron GitHub
+    # cannot parse is a scheduled job that silently never runs.
+    - name: Workflow contract
+      shell: bash
+      run: npm run check:workflows
 
     - name: Typecheck
       shell: bash

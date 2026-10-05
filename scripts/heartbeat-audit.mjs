@@ -225,6 +225,29 @@ export function receiptTargets(rows) {
 // true; this says how loudly to say it, and main() cannot be tested without a
 // GitHub token, so the routing would otherwise be the one untested line in the
 // chain that produces the finding this whole file exists for.
+/**
+ * A red run is only a verdict when the workflow promises that red means
+ * something. Returns { verdict, finding?, note? } in the same shape
+ * assessReceipt uses, so reportAs() routes both without knowing which is which.
+ */
+export function assessTrip({ contract, run }) {
+  if (!contract) return { verdict: 'no-contract' };
+  if (!run || run.status !== 'completed') return { verdict: 'run-incomplete' };
+  if (run.conclusion === 'success') {
+    return {
+      verdict: 'clear',
+      note: `ran and did not trip - ${contract.what} looked healthy at ${run.run_started_at || run.created_at}.`,
+    };
+  }
+  return {
+    verdict: 'tripped',
+    finding: `TRIPPED - run ${run.id} concluded \`${run.conclusion}\`, which for this sentinel is ` +
+      `the report: ${contract.what}. The schedule is provably alive, so this is the opposite of a ` +
+      `dead cron - the gap this sentinel exists to watch for is present right now. The evidence it ` +
+      `posted is on #${ISSUE}; fix what it named, then re-run the sentinel to clear.`,
+  };
+}
+
 export function reportAs(ra) {
   if (ra.finding) return 'finding';
   if (ra.note) return 'note';
@@ -303,6 +326,39 @@ export const RECEIPTS = {
   'oct3-verify.yml': { marker: 'post-Oct-3 verifier', what: 'the Oct 3 verdict' },
   'oct28-verify.yml': { marker: 'post-Oct-28 verifier', what: 'the Oct 28 promotion verdict' },
 };
+
+// The mirror image of RECEIPTS, and the third thing a scheduled run can mean.
+//
+// RECEIPTS answers "did the verdict LAND?". The schedule model answers "did a
+// run START?". Neither asks what happens when the run is RED - and for a
+// sentinel, red is the whole point: oct4-sentinel.yml ends its happy path with
+// `SENTINEL TRIPPED - gap posted on issue #18"; exit 1`, so a non-success exit
+// IS the finding, reported rather than swallowed.
+//
+// It was swallowed. Run 37183204922 (the Oct 4 sentinel, 2026-10-04T06:34:35Z)
+// concluded `failure` because the Oct 3 chain had recorded no receipt - and the
+// auditor graded that slot `ok`, on the deliberate rule that "a RED run is
+// still evidence the schedule fired". That rule is right for liveness and wrong
+// here: a sentinel that fires has proven the schedule is alive AND that the
+// condition it watches is present. Only one of those is worth reporting.
+//
+/**
+ * Typed as a Record rather than left to inference: a pin asserts that the
+ * verifier workflows are ABSENT from this table, and absence cannot be
+ * expressed on an inferred literal type.
+ *
+ * @type {Record<string, { what: string }>}
+ */
+export const TRIPPERS = {
+  'oct4-sentinel.yml': { what: 'the Oct 3 chain landed no receipt on #18' },
+  'oct29-sentinel.yml': { what: 'the Oct 28 promotion crons landed no receipt on #18' },
+};
+
+// Deliberately NOT listed: the verifier workflows. oct3/oct28-verify exit 0
+// even when they fail to record (the #129 bug), so their conclusion carries no
+// signal either way - RECEIPTS is the contract that holds them to account.
+// verifier-drill is a weekly self-test rather than a witness to one day's
+// chain, so a red drill is a finding about the drill, not about a schedule.
 
 // Did the promised record actually land, for the period this audit covers?
 //
@@ -557,6 +613,7 @@ async function main() {
       rows.push({
         label, expr, lastDue, baseline, runObjs, periodStartMs,
         receipt: RECEIPTS[wf.path.split('/').pop()] || null,
+        tripper: TRIPPERS[wf.path.split('/').pop()] || null,
         // Resolved here, not in pass 2, so `receiptTargets` below can be a pure
         // function of the rows rather than a loop the tests cannot reach.
         okRun: runObjs.find((r) => Date.parse(r.run_started_at || r.created_at) >= lastDue) || null,
@@ -599,12 +656,20 @@ async function main() {
       // A run that is still going may not have posted yet; asking now would
       // be the auditor racing its own subject. Only a COMPLETED run owes us a
       // receipt, and only a workflow that promised one in the first place.
+      // A tripped sentinel is judged first and reported on its own: it is the
+      // loudest thing in this report, and it is exactly what the old
+      // any-conclusion-counts-as-fired rule used to discard.
+      const trip = assessTrip({ contract: row.tripper, run: okRun });
+      if (reportAs(trip) === 'finding') {
+        findings.push(`\`${label}\` cron \`${expr}\` ${trip.finding}`);
+        continue;
+      }
       const ra = receiptRows.includes(row)
         ? assessReceipt({ contract: receipt, run: okRun, comments: await comments(), periodStartMs })
         : { verdict: 'run-incomplete' };
-      const where = reportAs(ra);
-      if (where === 'finding') findings.push(`\`${label}\` cron \`${expr}\` ${ra.finding}`);
-      else if (where === 'note') notes.push(`\`${label}\` ${ra.note}`);
+      const where = reportAs(trip) === 'note' ? trip : ra;
+      if (reportAs(where) === 'finding') findings.push(`\`${label}\` cron \`${expr}\` ${where.finding}`);
+      else if (reportAs(where) === 'note') notes.push(`\`${label}\` ${where.note}`);
       continue;
     }
 

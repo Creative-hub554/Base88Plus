@@ -33,6 +33,8 @@ import {
   parseCron,
   prevFireBefore,
   formatLag,
+  TRIPPERS,
+  assessTrip,
 } from '../scripts/heartbeat-audit.mjs';
 
 const MIN = 60 * 1000;
@@ -549,3 +551,125 @@ describe('receipt contracts are backed by the permission that permits them', () 
   });
 });
 
+// The third thing a scheduled run can mean. RECEIPTS asks whether a verdict
+// LANDED; the schedule model asks whether a run STARTED. Neither asked what a
+// RED run means - and run 37183204922 (the Oct 4 sentinel, concluded
+// `failure` because the Oct 3 chain recorded no receipt) was graded `ok` by
+// the rule that "a RED run is still evidence the schedule fired". That rule is
+// right for liveness and wrong for a sentinel: oct4-sentinel.yml ends its
+// happy path with `SENTINEL TRIPPED - gap posted on issue #18"; exit 1`, so red
+// IS the report.
+describe('a tripped sentinel is a verdict, not a dead cron', () => {
+  // The real run, verbatim in shape: scheduled, completed, conclusion failure.
+  const TRIPPED_RUN = {
+    id: 37183204922,
+    status: 'completed',
+    conclusion: 'failure',
+    run_started_at: '2026-10-04T06:34:35Z',
+  };
+
+  it('files a finding naming the run and the gap', () => {
+    const t = assessTrip({ contract: TRIPPERS['oct4-sentinel.yml'], run: TRIPPED_RUN });
+    expect(t.verdict).toBe('tripped');
+    expect(t.finding).toContain('37183204922');
+    expect(t.finding).toContain('failure');
+    expect(t.finding).toMatch(/opposite of a dead cron/);
+    expect(reportAs(t)).toBe('finding');
+  });
+
+  // The finding must carry WHAT tripped. A run id alone leaves the operator to
+  // go re-derive the gap, which is the work the sentinel already did.
+  it("quotes the contract's own description of the gap", () => {
+    const contract = TRIPPERS['oct4-sentinel.yml'];
+    const t = assessTrip({ contract, run: TRIPPED_RUN });
+    expect(t.finding).toContain(contract.what);
+    // ...and the note quotes it too, so a clear sentinel still says what it watched.
+    const clear = assessTrip({ contract, run: { ...TRIPPED_RUN, conclusion: 'success' } });
+    expect(clear.note).toContain(contract.what);
+  });
+
+  // The bug in one line: any conclusion used to count as "the schedule fired",
+  // so a tripped sentinel was indistinguishable from a healthy one.
+  it('does NOT call a tripped sentinel healthy', () => {
+    const t = assessTrip({ contract: TRIPPERS['oct4-sentinel.yml'], run: TRIPPED_RUN });
+    expect(t.note).toBeUndefined();
+  });
+
+  it('reports a clean sentinel as a note, not a finding', () => {
+    const t = assessTrip({
+      contract: TRIPPERS['oct4-sentinel.yml'],
+      run: { ...TRIPPED_RUN, conclusion: 'success' },
+    });
+    expect(t.verdict).toBe('clear');
+    expect(reportAs(t)).toBe('note');
+    expect(t.finding).toBeUndefined();
+  });
+
+  it('stays silent for a workflow with no trip contract', () => {
+    expect(assessTrip({ contract: null, run: TRIPPED_RUN })).toEqual({ verdict: 'no-contract' });
+    // The verifiers are NOT trippers: oct3/oct28 exit 0 even when they fail to
+    // record, so their conclusion carries no signal. RECEIPTS holds them to
+    // account instead.
+    expect(TRIPPERS['oct3-verify.yml']).toBeUndefined();
+    expect(TRIPPERS['oct28-verify.yml']).toBeUndefined();
+  });
+
+  it('stays silent while the run is still in progress', () => {
+    const t = assessTrip({
+      contract: TRIPPERS['oct4-sentinel.yml'],
+      run: { ...TRIPPED_RUN, status: 'in_progress' },
+    });
+    expect(t.verdict).toBe('run-incomplete');
+    expect(reportAs(t)).toBe('silent');
+  });
+
+  it('treats every non-success conclusion as a trip', () => {
+    for (const conclusion of ['failure', 'cancelled', 'timed_out', 'action_required', 'startup_failure']) {
+      const t = assessTrip({ contract: TRIPPERS['oct4-sentinel.yml'], run: { ...TRIPPED_RUN, conclusion } });
+      expect(t.verdict, conclusion).toBe('tripped');
+    }
+  });
+
+  // The description is what tells an operator WHICH gap fired, so it is pinned
+  // literally. Without this the mutation that rewrites it to something generic
+  // is equivalent - it changes the contract and the finding together - and the
+  // report degrades to "something tripped" while every other pin stays green.
+  it('describes each gap specifically enough to act on', () => {
+    expect(TRIPPERS['oct4-sentinel.yml'].what).toBe('the Oct 3 chain landed no receipt on #18');
+    expect(TRIPPERS['oct29-sentinel.yml'].what).toBe('the Oct 28 promotion crons landed no receipt on #18');
+  });
+
+  // The table is the contract, so it is pinned against the real files: every
+  // workflow named here must still exist and still exit non-zero when it trips.
+  it('only names sentinels that really do exit non-zero when they trip', () => {
+    for (const file of Object.keys(TRIPPERS)) {
+      const text = readFileSync(join('.github', 'workflows', file), 'utf8');
+      expect(text, file).toMatch(/SENTINEL TRIPPED[^\n]*exit 1|exit 1[^\n]*TRIPPED/);
+    }
+  });
+});
+
+// assessTrip is pure, so it is fully pinned above - which is exactly why the
+// two mutations below SURVIVED it: nothing asserted that main() actually hands
+// the contract to the helper, or reports what comes back. These are structural
+// pins over the source, the same shape this file already uses for the CI
+// permission guard. The functional proof is the live dry run, which reports
+// 2 findings against the real repo; with either line removed it reports 1.
+describe('main() reports a trip instead of dropping it', () => {
+  const src = () => readFileSync(join('scripts', 'heartbeat-audit.mjs'), 'utf8');
+
+  it('carries the trip contract onto every row', () => {
+    expect(src()).toMatch(/tripper:\s*TRIPPERS\[wf\.path\.split\('\/'\)\.pop\(\)\]/);
+  });
+
+  it('pushes a tripped sentinel into findings, not into the notes', () => {
+    const text = src();
+    const block = text.match(/const trip = assessTrip\([\s\S]*?\n {6}\}/);
+    expect(block, 'the trip assessment must exist in main()').toBeTruthy();
+    expect(block![0]).toMatch(/reportAs\(trip\) === 'finding'/);
+    expect(block![0]).toMatch(/findings\.push/);
+    // The `continue` matters as much as the push: without it the receipt check
+    // below would also grade the slot and file a second, vaguer finding.
+    expect(block![0]).toMatch(/continue;/);
+  });
+});

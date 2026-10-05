@@ -23,7 +23,7 @@ on:
   schedule:
     - cron: '47 7 3 10 *' # Oct 3, 07:47 UTC - after the 07:17 snapshot cron
     - cron: '7 9 3 10 *'  # Oct 3, 09:07 UTC - retry if the cron run was queued
-    - cron: '17 19 3 10 *'# Oct 3, 19:17 UTC - evening backstop / live re-compare
+    - cron: '17 19 3 10 *' # Oct 3, 19:17 UTC - evening backstop / live re-compare
   workflow_dispatch:
     inputs:
       smoke:

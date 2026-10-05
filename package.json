@@ -15,6 +15,7 @@
     "test": "vitest run",
     "lint": "eslint .",
     "check:node": "node scripts/check-node-contract.js",
+    "check:workflows": "node scripts/check-workflows.mjs",
     "check:schedule-age": "node scripts/check-snapshot-age.js",
     "check:deploy-key": "node scripts/check-deploy-key.js",
     "check:oct3": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/oct3-check.ps1",

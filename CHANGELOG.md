@@ -37,7 +37,7 @@ process. Download zips: the
   even when they fail to record (the #129 bug), so their conclusion carries no
   signal either way - `RECEIPTS` is the contract that holds them to account.
 
-  63 pins in `tests/heartbeat-schedule-grace.test.ts` (was 53), mutation-verified
+  64 pins in `tests/heartbeat-schedule-grace.test.ts` (was 53), mutation-verified
   7/7. Three mutations survived the first pass - `assessTrip` is pure and fully
   pinned, which is exactly why nothing asserted that `main()` hands it the
   contract or reports what comes back. Those are pinned now, structurally, the

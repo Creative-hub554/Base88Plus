@@ -12,6 +12,44 @@ process. Download zips: the
 
 ## [Unreleased]
 
+### Added
+- **Every AI provider worth naming is now built in — 33 catalog entries, up from 15.**
+
+  Eighteen new hosted entries: Azure OpenAI, Amazon Bedrock, Cohere, Perplexity,
+  Cerebras, SambaNova, NVIDIA NIM, DeepInfra, SiliconFlow, Alibaba DashScope (Qwen),
+  Moonshot (Kimi), Z.ai (GLM), MiniMax, Hugging Face, Novita, Nebius, Upstage and
+  AI21. They join OpenAI, Anthropic, Google, Groq, Mistral, DeepSeek, OpenRouter,
+  Together, Fireworks, xAI, free-tier Cloudflare Workers AI, the local
+  Ollama / LM Studio / vLLM servers and the custom catch-all — **29 hosted,
+  up from 11**.
+
+  Every new base URL was **probed, not remembered**: an unauthenticated POST to
+  `/chat/completions` must reach auth (401/403 = the route exists; 404 = do not
+  ship), and each `defaultModel` comes from the vendor's own docs or a live
+  `/models` response. GitHub Models was researched and then dropped — it was
+  retired on 2026-07-30, so there is nothing left to integrate.
+
+  Two entries say in their `note` what the user must edit (Azure ships a
+  placeholder host, Bedrock a region), and Bedrock and AI21 have no usable
+  `GET /models` — so `fetchModels` now treats 404/405 as "empty catalog, fall
+  back to the default model" instead of "provider down". Without that a
+  perfectly healthy Bedrock would have been reported unreachable on first open.
+
+  `.env.example` now documents one `<ID>_API_KEY` per credentialed provider,
+  which exposed that it had been documenting `GOOGLE_GENERATIVE_AI_API_KEY` all
+  along — a variable the gateway has never read, because the fallback is derived
+  from the id (`GOOGLE_API_KEY`). Copying the old file configured nothing for
+  Google.
+
+  `tests/provider-registry.test.ts` — **18 pins**. Structural: unique ids shaped
+  like an env var, no baked credentials, only the kinds `resolveModel` accepts,
+  `custom` last, `{account}` templated only for Workers AI, placeholder hosts
+  documented, local endpoints keyless. Literal: every probed base URL and default
+  model, each on its own vendor host. Contract: the `.env.example` ↔ gateway
+  derivation in both directions, and the README's provider count against the
+  registry itself — the class of stale number this file shipped once already.
+  Mutation-verified **14/14**.
+
 ### Fixed
 - **A sentinel that fired was being reported as healthy.**
 

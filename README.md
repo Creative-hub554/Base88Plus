@@ -12,9 +12,13 @@ Describe an app in chat → the AI writes the files → you see it running in a 
 preview. Refine by chatting. Download or publish when done.
 
 The core difference from Base44: **the AI engine is pluggable**. Bring your own
-key for OpenAI, Anthropic, Google Gemini, Groq, Mistral, DeepSeek, OpenRouter,
-Together, Fireworks, xAI — or run fully local with Ollama, LM Studio, or any
-vLLM/llama.cpp server. One unified gateway (`src/lib/providers/gateway.ts`)
+key for any of **29 hosted providers** — OpenAI, Anthropic, Google Gemini, Groq,
+Mistral, DeepSeek, OpenRouter, Together, Fireworks, xAI, Azure OpenAI, Amazon
+Bedrock, Cohere, Perplexity, Cerebras, SambaNova, NVIDIA, DeepInfra, SiliconFlow,
+Alibaba Qwen, Kimi, Z.ai (GLM), MiniMax, Hugging Face, Novita, Nebius, Upstage,
+AI21 and free-tier Cloudflare Workers AI — or run fully local with Ollama,
+LM Studio, or any vLLM/llama.cpp server. One unified gateway
+(`src/lib/providers/gateway.ts`)
 normalizes them all through the [Vercel AI SDK](https://ai-sdk.dev)'s
 OpenAI-compatible adapter, so adding a new vendor is a one-line catalog entry —
 no vendor SDKs, no code changes.
@@ -82,7 +86,8 @@ src/
 ## Adding a new provider
 
 Either use **Settings → Custom OpenAI-compatible** (base URL + key + model —
-works for Azure OpenAI, Perplexity, Cerebras, NovelAI, anything), or add a row
+works for anything with an OpenAI chat-completions API, e.g. NovelAI or an
+in-house gateway), or add a row
 to `DEFAULT_PROVIDERS` in `src/lib/providers/registry.ts`.
 
 ## CI

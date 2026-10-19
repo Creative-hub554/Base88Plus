@@ -1,0 +1,87 @@
+# Record recovery - re-post a record that a workflow computed but never recorded.
+#
+# Two kinds of record-keeper, and they do not owe the same thing. A VERIFIER
+# posts a verdict every time it derives one, so any completed run without a
+# comment on #18 is a lost record. A SENTINEL posts only when it TRIPS, so a
+# green sentinel run is silent by design and owes nothing - and a tripped one's
+# comment is the whole diagnosis, since the red run itself only says "check #18".
+#
+# The failure this closes is not "no verdict was produced". It is "a verdict was
+# produced and then lost", which is what 2026-10-03 actually looked like:
+# oct3-verify.yml fired three times, derived PASS_REFRESHED three times, and
+# every POST returned 403 because the workflow lacked issues: write. Each run
+# printed COMMENT_FAILED and exited 0 anyway, so the chain read as green while
+# recording nothing. The verdict survived only in the run's own artifact, which
+# expires after 90 days, and it was recovered by hand six days later.
+#
+# scripts/recover-verdicts.mjs is that hand recovery, automated and put on a
+# clock: it lists the scheduled verifier runs inside the retention window, skips
+# any whose verdict is already on #18, and re-posts the rest from the run's own
+# log artifact. It never invents a verdict - a run whose artifact carries no
+# VERDICT= line (a date gate refusing, an in-progress attempt) is reported, not
+# guessed at.
+#
+# Weekly, because that is the slowest thing it can afford to be: the window it
+# has to work in is 90 days, and the heartbeat that reports the same gap runs
+# Mondays at 07:53. This runs at 06:23 so the repair lands before the report
+# that would otherwise describe it.
+#
+# workflow_dispatch is a dry-run drill (RECOVER_DRY_RUN=1: prints what it would
+# post, never posts).
+name: Recover lost records
+
+on:
+  schedule:
+    - cron: '23 6 * * 1' # Mondays 06:23 UTC - ahead of the 07:53 heartbeat
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run: print what would be posted, never post to #18'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+  # The verifier this repairs did not have this scope, which is why it broke.
+  issues: write
+
+concurrency:
+  group: recover-verdicts
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the recovery pass
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Re-post any record whose run finished but recorded nothing
+        env:
+          RECOVER_TOKEN: ${{ github.token }}
+          DRY: ${{ inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          if [ "$DRY" = "true" ]; then
+            echo "DRY mode: printing what would be posted, #18 untouched"
+            export RECOVER_DRY_RUN=1
+          fi
+          set +e
+          node scripts/recover-verdicts.mjs | tee recover-verdicts.log
+          code=$?
+          echo "exit=$code" >> recover-verdicts.log
+          case "$code" in
+            0) echo "recovery pass clean: no record is missing, or all recovered";;
+            1) echo "a completed run computed a record that could not be recovered - needs a human"; exit 1;;
+            *) echo "unexpected recovery exit $code"; exit 1;;
+          esac
+
+      - name: Attach the recovery log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: recover-verdicts-log
+          path: recover-verdicts.log
+          if-no-files-found: error

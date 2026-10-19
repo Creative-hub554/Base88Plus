@@ -301,6 +301,416 @@ jobs:
         shell: bash
         run: npm run check:perf
 
+  # THE SOAK — the reload-leak checking, run against a REAL build rather than the
+  # fixture server the suite uses.
+  #
+  # `npm test` already soaks the supervisor end to end (tests/soak-supervisor.test.ts
+  # performs five reloads through all three traffic phases and judges every leak
+  # check), but against tests/fixtures/prod-death-server.mjs, because a suite cannot
+  # demand that somebody ran `npm run build` first. So the tool's own default — the
+  # real `next start` over `.next`, which is the surface `npm start` actually
+  # supervises — was exercised by hand on a maintainer's machine and by nothing
+  # else. That is the shape of a check that is green until the day it is needed.
+  #
+  # It is ALSO the only CI step that builds the app at all: the gates sequence
+  # installs, checks the contracts, typechecks, lints and tests the source without
+  # ever running `next build`, so a build break was something that could merge green.
+  #
+  # TWELVE RELOADS, and that number is not a round one. The descriptor floor is
+  # judged per phase, and a phase needs four readings before a floor can be read
+  # from it (`handleTrendProblems`): at three reloads every phase has one, and the
+  # check reports itself as NOT JUDGED — the opposite of not rotting. Twelve is the
+  # smallest count that judges all three phases, and the count the `--handle-slack`
+  # default of 8 was measured against ("a judged-statistic spread of 0–3 over a
+  # twelve-reload soak", scripts/soak-supervisor.mjs DEFAULTS). That slack is left at
+  # its default rather than widened for a runner: the descriptor reading on LINUX —
+  # this job — is a live `/proc/<pid>/fd` count taken at the check, while on Windows it
+  # is sampled by a 400ms PowerShell watcher whose noise is documented at up to 13
+  # handles and was measured at 15 under load on a Windows box (a red descriptor floor
+  # there is re-run before it is believed). Widening the slack for the platform CI does
+  # not use would be narrowing the check. Everything else is
+  # the soak's own default, deliberately: `--window-ms` 6000 is the soak's ceiling
+  # rather than an operator's 90s, and `--busy-rate` 8 / `--max-in-flight` 4 are the
+  # "evidence, not a load test" values — so a runner that is merely slow cannot turn
+  # a reload into an overload and fail it for a reason that is not a leak.
+  #
+  # WHY BLOCKING, AND WHY THAT IS NOT "SLOW". The soak has a verdict (a leak, a
+  # reload that did not land, or a door that cost a client its answer), so it is
+  # gated through `ci-ok` like the rehearsals are: a gate nobody has to pass is the
+  # local habit it replaced. It costs the merge no WALL time — this job runs in
+  # parallel with the gates matrix, and the gates legs are the long pole by minutes
+  # — and ~2 minutes of soaking plus one install and one build is the whole of it.
+  #
+  # The oldest blocking leg, for the same reason the perf gate pins to it (the
+  # oldest Node in the support window is the one users run). Nothing here is about
+  # Node's behavior, which is why one leg is enough: the OTHER legs still soak the
+  # supervisor on every run, through the suite's fixture soak.
+  soak:
+    name: soak
+    needs: matrix
+    runs-on: ubuntu-latest
+    # ~2 minutes of reloads here, plus an install and a build; the soak's own
+    # budgets (a 60s record budget per reload) carry the real failure conditions.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Resolve the oldest blocking leg
+        id: node
+        run: |
+          legs='${{ needs.matrix.outputs.legs }}'
+          echo "legs: $legs"
+          oldest=$(node -e "console.log(JSON.parse(process.argv[1])[0])" "$legs")
+          echo "soaking on node $oldest"
+          echo "version=$oldest" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ steps.node.outputs.version }}
+          cache: npm
+
+      - name: Install dependencies
+        shell: bash
+        run: npm ci
+
+      # The soak supervises the real `next start` over `.next` and refuses to
+      # start without a build (`BUILD_ID`), naming the command that makes one.
+      - name: Build
+        shell: bash
+        run: npm run build
+
+      # `--json` puts the summary ALONE on the STDOUT of the soak and the narrative
+      # on stderr, so the account survives as a file for the artifact below while the
+      # job log stays readable. `--silent` is part of that, not a tidy-up: plain
+      # `npm run` writes its own two-line banner to stdout BEFORE the script runs, so
+      # the redirect would produce an artifact that JSON.parse rejects while the job
+      # stayed green — measured, and pinned by the test beside the soak.
+      #
+      # A soak that could not be run is exit 2 and writes no summary; the upload below
+      # collects whatever exists either way.
+      - name: Soak the supervisor's reloads
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/soak"
+          npm run --silent soak:supervisor -- --reloads 12 --dir "$RUNNER_TEMP/soak" --json > soak-summary.json
+
+      # THE TREND — whether the reloads cost more as the soak went on, which is what a
+      # leak does on its way to being a count.
+      #
+      # The soak writes one trend line per run beside the history (`--trend`, default
+      # `<dir>/soak-trend.jsonl`), and scripts/check-soak-trend.mjs reads a file of
+      # them: the newest run against its own reloads (always judgeable at twelve,
+      # because four readings is what a floor needs) and against the runs before it
+      # (judged whenever the file has three of the same profile). A step of its own
+      # rather than a line in the soak, deliberately: the soak's verdict is about a
+      # leak, and this is about cost, and a job that failed for a reason has to say
+      # which one.
+      #
+      # ALL THREE EXIT CODES FAIL THE STEP, 2 included, and that is not an oversight: at
+      # twelve reloads every phase has the four readings this reads, so "could not
+      # judge" here means the trend file is missing or unreadable — the wiring broke,
+      # not the numbers. (It is also the second reason the count is twelve: a job that
+      # ran three reloads would pass the soak and fail here, which is the loud way to
+      # hear that the soak is checking less than it says.)
+      # A red soak gets its door claims spelled out here as notes (which reload, on
+      # which port, and what the connection it held was answered or ended by), since
+      # this step is the one that fails and its log is where a person lands.
+      - name: Judge the trend
+        shell: bash
+        run: |
+          npm run --silent check:soak-trend -- "$RUNNER_TEMP/soak/soak-trend.jsonl"
+
+      # always(): the account of a FAILING soak is the one worth having — the
+      # summary names the problem, the history is the same file the gate reads, and
+      # the trend line is what a file of runs is made of (download a few artifacts of
+      # `soak-account` and judge them together and the across-runs half has history).
+      #
+      # `server.log` is the app's OWN output as the supervisor streamed it, which is
+      # where its request log lives: a client a swap cost is named in the account by
+      # the ordinal it was handed to the door at, that ordinal is on the request the
+      # client asked with, and `soak:diagnose` follows the loss into this file and
+      # prints the client's own line. Without it the account names the client and
+      # stops there.
+      # The per-reload held connection is in BOTH the summary and the trend line, so
+      # a red door claim is diagnosed from this download rather than from a re-run —
+      # `npm run soak:diagnose -- <the unpacked download>` prints the three files as
+      # one incident timeline (every reload on the run's own clock, the problems at the
+      # reload they are about).
+      - name: Upload the soak's own account
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: soak-account
+          path: |
+            soak-summary.json
+            ${{ runner.temp }}/soak/reloads.jsonl
+            ${{ runner.temp }}/soak/soak-trend.jsonl
+            ${{ runner.temp }}/soak/server.log
+          if-no-files-found: warn
+
+  # THE REHEARSALS — the PowerShell tools that decide a verdict, exercised on the
+  # engine that runs them for real.
+  #
+  # scripts/verify-oct3.ps1, verify-oct28.ps1, oct4-sentinel.ps1 and
+  # oct29-sentinel.ps1 are what turn a cron day into a record on #18, and until
+  # this job existed the only way to run any of them end to end was by hand on a
+  # maintainer's Windows box. A rehearsal that only ever runs where its author
+  # sits is a rehearsal that agrees with itself: the cron fires on ubuntu-latest,
+  # under PowerShell 7 (`pwsh -NoProfile -File scripts/verify-oct3.ps1` in
+  # oct3-verify.yml), and nothing checked that the scripts survive that engine.
+  # `pwsh` is preinstalled on the runner, the rehearsals are one command each
+  # (`npm run rehearse:sentinels`, `npm run rehearse:lifecycle`,
+  # `npm run rehearse:transports`), and all three are simulated end to end —
+  # nothing here reaches GitHub, and the fake token makes sure a mis-wired run
+  # fails at the far end instead of posting.
+  #
+  # ITS OWN JOB, not a step in gates-steps: this is one run of a PowerShell
+  # engine and a dozen Node tools, so it belongs on one runner rather than on
+  # every Node leg and the canary as well. It consumes only the oldest computed
+  # leg to run Node on, for the same reason perf-gate measures there — the oldest
+  # line in the support window is the one users actually run.
+  #
+  # ONE ENGINE IS NOT ENOUGH, and the reason is the defect this job caught on its
+  # first run. scripts/verdict-contract.ps1 was handing the API a [DateTime] where
+  # the declaration holds an ISO instant — `?since=10/28/2026 00:00:00`, read as
+  # LOCAL time, so the window slid by the machine's UTC offset and a PASS recorded
+  # the day BEFORE promotion day cleared the promotion-day sentinel. That was not a
+  # bug in a script but a property of the ENGINE: ConvertFrom-Json converts such a
+  # string on every PowerShell 7, and the rehearsals had only ever run on Windows
+  # PowerShell 5.1, which does not. A version-blind rehearsal reports on behaviour
+  # it has never seen, so this job runs more than one line (see the matrix below).
+  #
+  # BLOCKING (no continue-on-error), reached through ci-ok, so no
+  # branch-protection edit is needed.
+  rehearsals:
+    name: rehearsals (pwsh ${{ matrix.pwsh }})
+    needs: matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      # A failure on one engine is a fact about that engine, not version drift to
+      # be hidden by cancelling the survivor.
+      fail-fast: false
+      matrix:
+        # TWO LINES OF PowerShell 7, chosen for the two engines these tools
+        # actually meet. 7.4 is the LTS line (the oldest an un-upgraded runner
+        # may still be carrying) and 7.6 is the newest stable line, i.e. what a
+        # maintainer's box has; between them they also cover the two parses in
+        # ConvertFrom-VerdictJson, which asks System.Text.Json for verbatim values
+        # on any engine that has it and falls back to ConvertFrom-Json on 5.1.
+        #
+        # The series is named rather than a patch version: the newest stable patch
+        # of each line is resolved at run time, so a security release needs no edit
+        # here, and each leg ASSERTS the line it got (see the engine step below) -
+        # a leg that quietly used the image's pwsh would be one engine twice.
+        pwsh: ['7.4', '7.6']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The OLDEST blocking leg, resolved the way perf-gate resolves it: the
+      # rehearsal is about a PowerShell engine, not about the Node matrix, so one
+      # run on the oldest supported line is the whole measurement.
+      - name: Resolve the oldest blocking leg
+        id: node
+        run: |
+          legs='${{ needs.matrix.outputs.legs }}'
+          echo "legs: $legs"
+          version=$(node -e "console.log(JSON.parse(process.argv[1])[0])" "$legs")
+          echo "rehearsing on node $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ steps.node.outputs.version }}
+          cache: npm
+
+      - name: Install dependencies
+        shell: bash
+        run: npm ci
+
+      # The runner image ships ONE PowerShell, and not a chosen one — this leg is
+      # about the difference between two of them, so the series it claims is
+      # installed here from PowerShell's own release feed. `tar` + PATH rather than
+      # a container: the rehearsal also runs a dozen Node tools, and swapping the
+      # whole image to change the engine would change Node with it.
+      - name: Install PowerShell ${{ matrix.pwsh }}
+        id: pwsh
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          series='${{ matrix.pwsh }}'
+          releases="$RUNNER_TEMP/pwsh-releases.json"
+          curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
+            'https://api.github.com/repos/PowerShell/PowerShell/releases?per_page=100' -o "$releases"
+          # node rather than jq: setup-node ran two steps ago, so this is a tool
+          # the job is already holding. Newest stable patch of the series, no
+          # pre-release tags.
+          tag=$(node -e '
+            const releases = require(process.argv[1]);
+            const series = "v" + process.argv[2] + ".";
+            const stable = releases
+              .map((release) => release.tag_name)
+              .filter((tag) => tag.startsWith(series) && !tag.includes("-"))
+              .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+            process.stdout.write(stable.pop() ?? "");
+          ' "$releases" "$series")
+          if [ -z "$tag" ]; then
+            echo "no stable PowerShell release in the $series series"; exit 1
+          fi
+          version="${tag#v}"
+          dir="$RUNNER_TEMP/pwsh-$series"
+          mkdir -p "$dir"
+          curl -fsSL -o "$dir/pwsh.tar.gz" \
+            "https://github.com/PowerShell/PowerShell/releases/download/$tag/powershell-$version-linux-x64.tar.gz"
+          tar -xzf "$dir/pwsh.tar.gz" -C "$dir"
+          rm -f "$dir/pwsh.tar.gz"
+          chmod +x "$dir/pwsh"
+          "$dir/pwsh" -NoProfile -NonInteractive -Command '$PSVersionTable.PSVersion.ToString()'
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          # Prepended for every later step (GITHUB_PATH entries come before the
+          # system PATH), so bare `pwsh` is THIS engine: the harness and
+          # scripts/rehearse-pwsh.mjs both resolve the command by name.
+          echo "$dir" >> "$GITHUB_PATH"
+
+      # Which PowerShell this is, named before anything is rehearsed — and checked
+      # against the exact patch this leg installed, not merely against its series: a
+      # leg that quietly fell back to the image's engine would be the same run twice
+      # wearing a matrix, which is the failure mode a version matrix exists to
+      # prevent (and a series-only check would not see a same-series shadow). The
+      # version is read from the rehearsals' own reporter rather than by asking for
+      # a version a second way. This step also fails with the reason
+      # (REHEARSE_PWSH_MISSING, exit 2) if a runner somehow has no PowerShell at all,
+      # instead of leaving a green job that rehearsed nothing.
+      - name: PowerShell engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          want='${{ steps.pwsh.outputs.version }}'
+          got=$(npm run --silent rehearse:which | awk '{print $2}')
+          echo "installed pwsh $want, rehearsals resolve pwsh $got"
+          if [ "$got" != "$want" ]; then
+            echo "the rehearsals would run pwsh $got, not the ${{ matrix.pwsh }} line this leg installed ($want)"
+            exit 1
+          fi
+
+      # Each rehearsal's output is kept as well as shown: the parity job below
+      # compares these files, byte for byte, across the engines. `set -o pipefail`
+      # because `| tee` would otherwise report tee's exit status and a FAILED
+      # rehearsal would upload itself as a successful one.
+      #
+      # Both day-after sentinels, 16 scenarios, each record round-tripped through
+      # the recovery pass's own parser: the trip and clear paths rehearsed before
+      # their dates arrive.
+      - name: Sentinel rehearsal
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/rehearsal-output"
+          npm run rehearse:sentinels 2>&1 | tee "$RUNNER_TEMP/rehearsal-output/rehearsal-sentinels.txt"
+
+      # One record's whole life in one world, across the verifier, a sentinel, the
+      # heartbeat auditor and the recovery pass: computed -> filed -> lost ->
+      # recovered -> retired. The only rehearsal that exercises a POST (and
+      # COMMENT_FAILED) — into the world, never GitHub.
+      - name: Lifecycle rehearsal
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/rehearsal-output"
+          npm run rehearse:lifecycle 2>&1 | tee "$RUNNER_TEMP/rehearsal-output/rehearsal-lifecycle.txt"
+
+      # The two transports of the simulated GitHub, asked the same questions: the
+      # PowerShell stub the cron tools really run against, and the Node fetch shim
+      # the heartbeat auditor and the recovery pass really run against. Both
+      # rehearsals above were green while the two transports disagreed — each drove
+      # one of them, so nothing asked whether a fact meant the same thing on both
+      # sides. Unlike the two above, this leg is a property of the TRANSPORT rather
+      # than of a tool, which is why it compares the two sides rather than
+      # rehearsing one: it also runs on both engine legs, so a shim that only ever
+      # agreed with itself on the maintainer's box fails here.
+      - name: Transport rehearsal
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/rehearsal-output"
+          npm run rehearse:transports 2>&1 | tee "$RUNNER_TEMP/rehearsal-output/rehearsal-transports.txt"
+
+      # The one number no report can show: a run keeps ONE node child for its
+      # whole length, whichever rehearsal asks it what. Every baseline above is
+      # byte-identical whether the run keeps one child or twenty — which is what
+      # makes this worth checking rather than reading: a broken ownership rule
+      # (a process that starts its own child instead of connecting to the run's)
+      # was measured leaving all 16 scenarios green while the run held TWO.
+      # scripts/check-rehearsal-children.mjs measures it from OUTSIDE the run, on
+      # the process table rather than on the run's own word, and runs the sentinel
+      # leg itself — so it writes no artifact of its own (the parity job reads
+      # every `rehearsal-<suite>.txt` the steps above upload, and an extra one
+      # would be a suite with no baseline).
+      - name: One world child per run
+        shell: bash
+        run: npm run check:rehearse-children
+
+      # always(): the output of a FAILING rehearsal is the one most worth
+      # comparing — and it is what lets the parity job name the engine that
+      # disagrees rather than only that something did.
+      - name: Upload this engine's rehearsal output
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rehearsal-output-${{ steps.pwsh.outputs.version }}
+          path: ${{ runner.temp }}/rehearsal-output/rehearsal-*.txt
+          if-no-files-found: error
+
+  # THE CROSS-ENGINE PIN: two lines rehearsed the same tools, and this asks
+  # whether they said the same thing.
+  #
+  # The `rehearsals` legs each assert which engine they got; neither can assert
+  # that the other agrees, which is the property that actually matters. The
+  # disagreement that started all this was a property of the engine rather than of
+  # a script — every PowerShell 7 converts an ISO instant to [DateTime] inside
+  # ConvertFrom-Json, Windows PowerShell 5.1 never did — and a version matrix that
+  # never compares its legs reports on both and notices nothing when they diverge.
+  #
+  # scripts/rehearsal-parity.mjs compares the uploaded output byte for byte and
+  # FAILS on one input as well as on a difference: a comparison that cannot fail
+  # reads like one that passed. Blocking, reached through ci-ok, so a disagreement
+  # holds up the merge.
+  #
+  # AND AGAINST THE COMMITTED BASELINE in scripts/rehearsal-golden/, which is why
+  # this job checks the repository out at all. Comparing the two legs only catches
+  # the ENGINES diverging; both run the same test on the same commit, so a change
+  # that moves them together — a scenario renamed, a verdict flipped, a count
+  # edited — passes that comparison by construction. The baseline is the
+  # rehearsal's own report lines with the machine's directories masked, so an edit
+  # to what the rehearsals observe lands as a diff someone has to read, and a suite
+  # with no baseline (or a baseline no leg uploaded) fails rather than going quiet.
+  #
+  # No setup-node and no npm ci: the comparison is a dependency-free script over
+  # text files, so all it needs is the checkout and the artifact download. Keeping
+  # it at that is the point — a pin that drags in the whole toolchain is a pin
+  # people delete when it is slow.
+  rehearsal-parity:
+    name: rehearsal-parity
+    needs: rehearsals
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download every engine's rehearsal output
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          pattern: rehearsal-output-*
+          path: engines
+
+      - name: Compare the engines, byte for byte
+        shell: bash
+        run: |
+          ls -1 engines
+          npm run check:rehearsal-parity -- --dir engines
+
   # THE SAME GATE, MEASURED ON THE CANARY LEG BEFORE THAT LEG IS PROMOTED.
   #
   # The matrix is computed from the release schedule, so node 26 becomes a
@@ -379,7 +789,8 @@ jobs:
           if-no-files-found: error
 
   # Single stable required check. Its result is green ONLY when every
-  # computed gates leg passed.
+  # computed gates leg passed, the superlinearity gate passed, and both
+  # rehearsals passed.
   #
   # It deliberately does NOT need perf-gate-canary. That job is a measurement,
   # and a required check that waits on a measurement gives the measurement a
@@ -388,9 +799,15 @@ jobs:
   # the worst possible day to have it holding up merges. Mark THIS in branch protection (Settings →
   # Branches → Branch protection → Required status checks → "ci-ok") —
   # one name that survives promotions/demotions, unlike per-leg names.
+  #
+  # It DOES wait on the rehearsals job, on the cross-engine parity check, and on
+  # the soak: those are blockers with a verdict (a PowerShell tool either agrees
+  # with the simulated world it was handed or it does not; two engine lines either
+  # agree with each other or they do not; a retired run either left nothing behind
+  # or it leaked), and a gate nobody has to pass is the local habit it replaced.
   ci-ok:
     name: ci-ok
-    needs: [matrix, gates, perf-gate]
+    needs: [matrix, gates, perf-gate, soak, rehearsals, rehearsal-parity]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -399,12 +816,27 @@ jobs:
           echo "legs: ${{ needs.matrix.outputs.legs }}"
           echo "gates result: ${{ needs.gates.result }}"
           echo "perf-gate result: ${{ needs.perf-gate.result }}"
+          echo "soak result: ${{ needs.soak.result }}"
+          echo "rehearsals result: ${{ needs.rehearsals.result }}"
+          echo "rehearsal-parity result: ${{ needs.rehearsal-parity.result }}"
           if [ "${{ needs.gates.result }}" != "success" ]; then
             echo "✗ at least one blocking leg failed"
             exit 1
           fi
           if [ "${{ needs.perf-gate.result }}" != "success" ]; then
             echo "✗ the superlinearity gate failed (a tracked hot path grew faster than its input)"
+            exit 1
+          fi
+          if [ "${{ needs.soak.result }}" != "success" ]; then
+            echo "✗ the soak failed (a reload leaked, did not land, or cost a client its answer — see the soak job's account artifact)"
+            exit 1
+          fi
+          if [ "${{ needs.rehearsals.result }}" != "success" ]; then
+            echo "✗ a rehearsal failed (a PowerShell tool disagrees with the simulated world it was handed)"
+            exit 1
+          fi
+          if [ "${{ needs.rehearsal-parity.result }}" != "success" ]; then
+            echo "✗ the engines disagree (see the rehearsal-parity job: a rehearsal is only evidence about the engine it ran on)"
             exit 1
           fi
           echo "✓ all blocking legs passed"

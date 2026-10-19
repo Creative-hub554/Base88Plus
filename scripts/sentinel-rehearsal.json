@@ -1,0 +1,334 @@
+{
+  "_about": [
+    "Rehearsal scenarios for scripts/oct4-sentinel.ps1 and scripts/oct29-sentinel.ps1.",
+    "",
+    "Both sentinels are day-after alarms whose dates have not arrived, and the states",
+    "they exist to classify cannot be produced on demand: a promotion day with no",
+    "verdict, a verdict with no PASS, a PASS that clears the trip, an issue closed",
+    "before the chain ran. So the world they read is simulated instead - the run",
+    "list, the issue and its comments - and the sentinel runs its OWN code against",
+    "it, via scripts/rehearse-sentinels.ps1. The harness shadows Invoke-RestMethod",
+    "in a child process and VERIFY_GNOMON makes the script force its own DRY_RUN, so",
+    "nothing here reaches the network or issue #18 and a rehearsal can never post.",
+    "",
+    "Run ids in the 99x series and comment ids in the 99xx series are FABRICATED -",
+    "there is no Oct 28 promotion day yet. The Oct 3/4 scenarios use the real ids,",
+    "the real Oct 3 runs and the real recovered verdict comment 6073315277, because",
+    "that chain has already happened and its states are the ones the sentinel has to",
+    "keep judging correctly.",
+    "",
+    "expect.bodyHeader is the record identity the sentinel must render that day: the",
+    "string the recovery pass searches for and the heartbeat audits against.",
+    "tests/sentinel-rehearsal.test.ts holds these literals to the declaration, so a",
+    "rehearsal cannot pass while a script and the loader disagree about what the",
+    "record is called.",
+    "",
+    "Every scenario that composes a record is also ROUND-TRIPPED: the captured log is",
+    "handed to the recovery pass itself (scripts/rehearse-roundtrip.mjs, which imports",
+    "the pass's own parseRecordLog/buildRecoveredBody rather than reimplementing them),",
+    "and the comment the pass would post has to be the text the sentinel printed,",
+    "character for character. That comment is then put on the simulated issue and the",
+    "scenario is run again, where the sentinel must recognise the record it is handed",
+    "back instead of filing the day twice."
+  ],
+  "scenarios": [
+    {
+      "name": "oct29: refuses to judge before its own day",
+      "sentinel": "oct29-sentinel.yml",
+      "gnomon": "2026-10-25",
+      "issue": { "state": "open", "closed_at": null, "comments": 12 },
+      "runs": [],
+      "comments": [],
+      "expect": {
+        "exit": 2,
+        "verdict": null,
+        "posts": false,
+        "bodyHeader": null,
+        "stdoutContains": ["REFUSED_DATE_GATE today=2026-10-25"]
+      }
+    },
+    {
+      "name": "oct29: none of the four promotion crons fired",
+      "sentinel": "oct29-sentinel.yml",
+      "gnomon": "2026-10-29",
+      "issue": { "state": "open", "closed_at": null, "comments": 12 },
+      "runs": [],
+      "comments": [],
+      "expect": {
+        "exit": 1,
+        "verdict": "SENTINEL_NO_SCHEDULED_RUN",
+        "posts": true,
+        "bodyHeader": "post-Oct-28 sentinel (checked 2026-10-29)",
+        "stdoutContains": []
+      }
+    },
+    {
+      "name": "oct29: an attempt is still running on sentinel morning",
+      "sentinel": "oct29-sentinel.yml",
+      "gnomon": "2026-10-29",
+      "issue": { "state": "open", "closed_at": null, "comments": 12 },
+      "runs": [
+        { "id": 99000000001, "status": "completed", "conclusion": "success", "created_at": "2026-10-28T07:23:11Z", "html_url": "https://github.com/x/runs/99000000001" },
+        { "id": 99000000002, "status": "in_progress", "conclusion": null, "created_at": "2026-10-28T09:33:02Z", "html_url": "https://github.com/x/runs/99000000002" }
+      ],
+      "comments": [],
+      "expect": {
+        "exit": 0,
+        "verdict": null,
+        "posts": false,
+        "bodyHeader": null,
+        "stdoutContains": ["SENTINEL_IN_PROGRESS"]
+      }
+    },
+    {
+      "name": "oct29: the chain fired and recorded nothing at all",
+      "sentinel": "oct29-sentinel.yml",
+      "gnomon": "2026-10-29",
+      "issue": { "state": "open", "closed_at": null, "comments": 12 },
+      "runs": [
+        { "id": 99000000001, "status": "completed", "conclusion": "success", "created_at": "2026-10-28T07:23:11Z", "html_url": "https://github.com/x/runs/99000000001" },
+        { "id": 99000000002, "status": "completed", "conclusion": "failure", "created_at": "2026-10-28T09:33:02Z", "html_url": "https://github.com/x/runs/99000000002" },
+        { "id": 99000000003, "status": "completed", "conclusion": "success", "created_at": "2026-10-28T13:33:41Z", "html_url": "https://github.com/x/runs/99000000003" },
+        { "id": 99000000004, "status": "completed", "conclusion": "success", "created_at": "2026-10-28T19:33:07Z", "html_url": "https://github.com/x/runs/99000000004" }
+      ],
+      "comments": [],
+      "expect": {
+        "exit": 1,
+        "verdict": "SENTINEL_RUN_NO_PASS",
+        "posts": true,
+        "bodyHeader": "post-Oct-28 sentinel (checked 2026-10-29)",
+        "stdoutContains": ["NO verdict was posted at all"]
+      }
+    },
+    {
+      "name": "oct29: promotion day ended with NO_DISPATCH_RUN",
+      "sentinel": "oct29-sentinel.yml",
+      "gnomon": "2026-10-29",
+      "issue": { "state": "open", "closed_at": null, "comments": 12 },
+      "runs": [
+        { "id": 99000000001, "status": "completed", "conclusion": "success", "created_at": "2026-10-28T07:23:11Z", "html_url": "https://github.com/x/runs/99000000001" },
+        { "id": 99000000004, "status": "completed", "conclusion": "success", "created_at": "2026-10-28T19:33:07Z", "html_url": "https://github.com/x/runs/99000000004" }
+      ],
+      "comments": [
+        { "id": 9900000101, "created_at": "2026-10-28T19:40:00Z", "body": "post-Oct-28 verifier (2026-10-28): **NO_DISPATCH_RUN**\n\nNo workflow_dispatch CI run exists on 2026-10-28.\n\nNext: fire the dispatch and re-run this verifier." }
+      ],
+      "expect": {
+        "exit": 1,
+        "verdict": "SENTINEL_AWAITING_DISPATCH",
+        "posts": true,
+        "bodyHeader": "post-Oct-28 sentinel (checked 2026-10-29)",
+        "stdoutContains": ["VERDICT_CLASSIFIED=NO_DISPATCH_RUN"]
+      }
+    },
+    {
+      "name": "oct29: a PASS landed, so the trip never happens",
+      "sentinel": "oct29-sentinel.yml",
+      "gnomon": "2026-10-29",
+      "issue": { "state": "open", "closed_at": null, "comments": 13 },
+      "runs": [
+        { "id": 99000000004, "status": "completed", "conclusion": "success", "created_at": "2026-10-28T19:33:07Z", "html_url": "https://github.com/x/runs/99000000004" }
+      ],
+      "comments": [
+        { "id": 9900000102, "created_at": "2026-10-28T20:05:00Z", "body": "post-Oct-28 verifier (run 99000000005, 2026-10-28): **PASS_PROMOTED**\n\n- Dispatch run: success\n\nNext: close #18 with CLOSE=1." }
+      ],
+      "expect": {
+        "exit": 0,
+        "verdict": null,
+        "posts": false,
+        "bodyHeader": null,
+        "stdoutContains": ["#18 verifier comments since Oct 28: 1", "SENTINEL_OK latest verifier verdict PASS_PROMOTED"]
+      }
+    },
+    {
+      "name": "oct29: a later FAIL outranks an earlier PASS",
+      "sentinel": "oct29-sentinel.yml",
+      "gnomon": "2026-10-29",
+      "issue": { "state": "open", "closed_at": null, "comments": 14 },
+      "runs": [
+        { "id": 99000000004, "status": "completed", "conclusion": "success", "created_at": "2026-10-28T19:33:07Z", "html_url": "https://github.com/x/runs/99000000004" }
+      ],
+      "comments": [
+        { "id": 9900000103, "created_at": "2026-10-28T20:05:00Z", "body": "post-Oct-28 verifier (run 99000000005, 2026-10-28): **PASS_TYPES_READY**\n\nNext: merge the types PR." },
+        { "id": 9900000104, "created_at": "2026-10-28T22:15:00Z", "body": "post-Oct-28 verifier (run 99000000006, 2026-10-28): **FAIL_CI_OK_RED**\n\nThe canary landed but the gates are red.\n\nNext: fix the gate and re-verify." }
+      ],
+      "expect": {
+        "exit": 1,
+        "verdict": "SENTINEL_RUN_NO_PASS",
+        "posts": true,
+        "bodyHeader": "post-Oct-28 sentinel (checked 2026-10-29)",
+        "stdoutContains": ["the latest verdict is FAIL_CI_OK_RED"]
+      }
+    },
+    {
+      "name": "oct29: a PASS recorded BEFORE promotion day does not clear it",
+      "sentinel": "oct29-sentinel.yml",
+      "gnomon": "2026-10-29",
+      "issue": { "state": "open", "closed_at": null, "comments": 13 },
+      "runs": [
+        { "id": 99000000004, "status": "completed", "conclusion": "success", "created_at": "2026-10-28T19:33:07Z", "html_url": "https://github.com/x/runs/99000000004" }
+      ],
+      "comments": [
+        { "id": 9900000105, "created_at": "2026-10-27T22:00:00Z", "body": "post-Oct-28 verifier (run 99000000007, 2026-10-27): **PASS_PROMOTED**\n\nA rehearsal pass, the day before the chain was due.\n\nNext: nothing." }
+      ],
+      "expect": {
+        "exit": 1,
+        "verdict": "SENTINEL_RUN_NO_PASS",
+        "posts": true,
+        "bodyHeader": "post-Oct-28 sentinel (checked 2026-10-29)",
+        "stdoutContains": ["#18 verifier comments since Oct 28: 0", "NO verdict was posted at all"]
+      }
+    },
+    {
+      "name": "oct29: #18 closed on promotion day is the mission accomplished",
+      "sentinel": "oct29-sentinel.yml",
+      "gnomon": "2026-10-29",
+      "issue": { "state": "closed", "closed_at": "2026-10-28T20:30:00Z", "comments": 13 },
+      "runs": [],
+      "comments": [],
+      "expect": {
+        "exit": 0,
+        "verdict": null,
+        "posts": false,
+        "bodyHeader": null,
+        "stdoutContains": ["SENTINEL_OK #18 closed on/after promotion day"]
+      }
+    },
+    {
+      "name": "oct29: #18 closed BEFORE the chain ran does not blind the sentinel",
+      "sentinel": "oct29-sentinel.yml",
+      "gnomon": "2026-10-29",
+      "issue": { "state": "closed", "closed_at": "2026-09-29T10:00:00Z", "comments": 11 },
+      "runs": [
+        { "id": 99000000004, "status": "completed", "conclusion": "success", "created_at": "2026-10-28T19:33:07Z", "html_url": "https://github.com/x/runs/99000000004" }
+      ],
+      "comments": [
+        { "id": 9900000106, "created_at": "2026-10-28T19:45:00Z", "body": "post-Oct-28 verifier (run 99000000008, 2026-10-28): **FAIL_PRE_PROMO**\n\nThe canary did not land.\n\nNext: fix the canary and re-verify." }
+      ],
+      "expect": {
+        "exit": 1,
+        "verdict": "SENTINEL_RUN_NO_PASS",
+        "posts": true,
+        "bodyHeader": "post-Oct-28 sentinel (checked 2026-10-29)",
+        "stdoutContains": ["WARN_CLOSED_EARLY", "#18 is currently CLOSED (since 2026-09-29T10:00:00Z)"]
+      }
+    },
+    {
+      "name": "oct29: the day's gap is already recorded, so it is not filed twice",
+      "sentinel": "oct29-sentinel.yml",
+      "gnomon": "2026-10-29",
+      "issue": { "state": "open", "closed_at": null, "comments": 13 },
+      "runs": [
+        { "id": 99000000001, "status": "completed", "conclusion": "success", "created_at": "2026-10-28T07:23:11Z", "html_url": "https://github.com/x/runs/99000000001" },
+        { "id": 99000000004, "status": "completed", "conclusion": "success", "created_at": "2026-10-28T19:33:07Z", "html_url": "https://github.com/x/runs/99000000004" }
+      ],
+      "comments": [
+        { "id": 9900000107, "created_at": "2026-10-29T01:00:12Z", "body": "post-Oct-28 sentinel (checked 2026-10-29): **SENTINEL_RUN_NO_PASS**\n\nThe Oct 29 sentinel found 2 completed scheduled oct28-verify attempt(s), but the latest verdict is FAIL_CI_OK_RED. The chain fired but did not land a pass.\n\nNext: fix and re-verify. Then re-run the sentinel to clear." }
+      ],
+      "expect": {
+        "exit": 1,
+        "verdict": "SENTINEL_RUN_NO_PASS",
+        "posts": false,
+        "alreadyRecorded": true,
+        "bodyHeader": "post-Oct-28 sentinel (checked 2026-10-29)",
+        "stdoutContains": []
+      }
+    },
+
+    {
+      "name": "oct4: no scheduled attempt ever fired",
+      "sentinel": "oct4-sentinel.yml",
+      "gnomon": "2026-10-04",
+      "issue": { "state": "open", "closed_at": null, "comments": 2 },
+      "runs": [],
+      "comments": [],
+      "expect": {
+        "exit": 1,
+        "verdict": "SENTINEL_NO_SCHEDULED_RUN",
+        "posts": true,
+        "bodyHeader": "post-Oct-3 sentinel (checked 2026-10-04)",
+        "stdoutContains": []
+      }
+    },
+    {
+      "name": "oct4: the chain fired but #18 carried no verdict (the real 2026-10-04 state)",
+      "sentinel": "oct4-sentinel.yml",
+      "gnomon": "2026-10-04",
+      "issue": { "state": "open", "closed_at": null, "comments": 1 },
+      "runs": [
+        { "id": 37157439771, "status": "completed", "conclusion": "success", "created_at": "2026-10-03T22:08:49Z", "html_url": "https://github.com/Creative-hub554/Base88Plus/actions/runs/37157439771" },
+        { "id": 37129011940, "status": "completed", "conclusion": "success", "created_at": "2026-10-03T14:15:51Z", "html_url": "https://github.com/Creative-hub554/Base88Plus/actions/runs/37129011940" },
+        { "id": 37123811425, "status": "completed", "conclusion": "success", "created_at": "2026-10-03T12:43:49Z", "html_url": "https://github.com/Creative-hub554/Base88Plus/actions/runs/37123811425" }
+      ],
+      "comments": [
+        { "id": 5998613523, "created_at": "2026-10-04T07:12:00Z", "body": "Weekly schedule heartbeat (2026-10-04): the Oct 3 verdict is missing.\n\nNo comment on #18 carries `post-Oct-3 verifier`. A green run is not a verdict, and the run logs expire in 90 days." }
+      ],
+      "expect": {
+        "exit": 1,
+        "verdict": "SENTINEL_RUN_NO_PASS",
+        "posts": true,
+        "bodyHeader": "post-Oct-3 sentinel (checked 2026-10-04)",
+        "stdoutContains": ["#18 verifier comments since Oct 3: 1 (PASS: 0)"]
+      }
+    },
+    {
+      "name": "oct4: the recovered PASS clears the trip (the real 2026-10-09 state)",
+      "sentinel": "oct4-sentinel.yml",
+      "gnomon": "2026-10-04",
+      "issue": { "state": "open", "closed_at": null, "comments": 2 },
+      "runs": [
+        { "id": 37157439771, "status": "completed", "conclusion": "success", "created_at": "2026-10-03T22:08:49Z", "html_url": "https://github.com/Creative-hub554/Base88Plus/actions/runs/37157439771" },
+        { "id": 37129011940, "status": "completed", "conclusion": "success", "created_at": "2026-10-03T14:15:51Z", "html_url": "https://github.com/Creative-hub554/Base88Plus/actions/runs/37129011940" },
+        { "id": 37123811425, "status": "completed", "conclusion": "success", "created_at": "2026-10-03T12:43:49Z", "html_url": "https://github.com/Creative-hub554/Base88Plus/actions/runs/37123811425" }
+      ],
+      "comments": [
+        { "id": 5998613523, "created_at": "2026-10-04T07:12:00Z", "body": "Weekly schedule heartbeat (2026-10-04): the Oct 3 verdict is missing.\n\nNo comment on #18 carries `post-Oct-3 verifier`. A green run is not a verdict, and the run logs expire in 90 days." },
+        { "id": 6073315277, "created_at": "2026-10-09T02:56:39Z", "body": "post-Oct-3 verifier (run 37157439771, 2026-10-03): **PASS_REFRESHED**\n\n- Scheduled run: success - https://github.com/Creative-hub554/Base88Plus/actions/runs/37123382655\n- Snapshot on main: _fetchedAt 2026-10-03T22:03:00Z\n\nNext: Nothing to do. Deploy-key bypass worked as designed." }
+      ],
+      "expect": {
+        "exit": 0,
+        "verdict": null,
+        "posts": false,
+        "bodyHeader": null,
+        "stdoutContains": ["#18 verifier comments since Oct 3: 2 (PASS: 1)", "SENTINEL_OK latest PASS from run comment 6073315277"]
+      }
+    },
+    {
+      "name": "oct4: an attempt is still running on sentinel morning",
+      "sentinel": "oct4-sentinel.yml",
+      "gnomon": "2026-10-04",
+      "issue": { "state": "open", "closed_at": null, "comments": 1 },
+      "runs": [
+        { "id": 37157439771, "status": "in_progress", "conclusion": null, "created_at": "2026-10-03T22:08:49Z", "html_url": "https://github.com/Creative-hub554/Base88Plus/actions/runs/37157439771" }
+      ],
+      "comments": [],
+      "expect": {
+        "exit": 0,
+        "verdict": null,
+        "posts": false,
+        "bodyHeader": null,
+        "stdoutContains": ["SENTINEL_IN_PROGRESS"]
+      }
+    },
+    {
+      "name": "oct4: the gap is already recorded, so it is not filed twice",
+      "sentinel": "oct4-sentinel.yml",
+      "gnomon": "2026-10-04",
+      "issue": { "state": "open", "closed_at": null, "comments": 2 },
+      "runs": [
+        { "id": 37157439771, "status": "completed", "conclusion": "success", "created_at": "2026-10-03T22:08:49Z", "html_url": "https://github.com/Creative-hub554/Base88Plus/actions/runs/37157439771" }
+      ],
+      "comments": [
+        { "id": 5998613523, "created_at": "2026-10-04T07:12:00Z", "body": "Weekly schedule heartbeat (2026-10-04): the Oct 3 verdict is missing.\n\nNo comment on #18 carries `post-Oct-3 verifier`." },
+        { "id": 5998700001, "created_at": "2026-10-04T01:00:09Z", "body": "post-Oct-3 sentinel (checked 2026-10-04): **SENTINEL_RUN_NO_PASS**\n\nThe Oct 4 sentinel found 1 completed scheduled oct3-verify attempt(s) in the 2026-10-03..2026-10-04 window, but NO comment on #18 carries a PASS verdict marker.\n\nNext: pull the oct3-verify-log artifacts and re-verify. Then re-run the sentinel to clear." }
+      ],
+      "expect": {
+        "exit": 1,
+        "verdict": "SENTINEL_RUN_NO_PASS",
+        "posts": false,
+        "alreadyRecorded": true,
+        "bodyHeader": "post-Oct-3 sentinel (checked 2026-10-04)",
+        "stdoutContains": []
+      }
+    }
+  ]
+}

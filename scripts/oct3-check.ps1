@@ -48,11 +48,20 @@ public class CredManOct3 {
 }
 if (-not $env:VERIFY_TOKEN) { Write-Output 'NO_TOKEN'; exit 1 }
 $h = @{ Authorization = "Bearer $($env:VERIFY_TOKEN)"; Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' }
-$base = 'https://api.github.com/repos/Creative-hub554/Base88Plus'
+# --- 0. the contract (scripts/verdict-contract.json) ---
+# The marker, the window, the day and the verdict shapes come from the declaration
+# through scripts/verdict-contract.ps1: this script must recognise exactly the
+# records the verifier writes, and the two had a copy each until they didn't.
+. (Join-Path $PSScriptRoot 'verdict-contract.ps1')
+$contract = Get-VerdictContract
+$watched = $contract.workflows.'oct3-verify.yml'
+$base = "https://api.github.com/repos/$($contract.repo)"
+$issue = $contract.issue
 $today = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
+$windowEnd = ([datetime]$watched.recordsOn).AddDays(1).ToString('yyyy-MM-dd')
 
 # 1. Scheduled oct3-verify runs on cron day (workflow_dispatch smoke runs never post - excluded by design)
-$runs = Invoke-RestMethod -Uri "$base/actions/workflows/oct3-verify.yml/runs?event=schedule&created=2026-10-03..2026-10-04&per_page=20" -Headers $h
+$runs = Invoke-RestMethod -Uri "$base/actions/workflows/$($watched.workflow)/runs?event=schedule&created=$($watched.recordsOn)..$windowEnd&per_page=20" -Headers $h
 $day = @($runs.workflow_runs)
 if ($day.Count -eq 0) {
   Write-Output "OCT3_CHECK NOT_YET (today=$today): no scheduled oct3-verify run yet - the automation is armed (workflow active) and fires 2026-10-03 07:47/09:07/19:17 UTC. Re-run after 08:00 UTC Oct 3."
@@ -67,8 +76,8 @@ if ($inProgress.Count -gt 0) {
 }
 
 # 2. Verdict from #18 (the verifier's own durable record; idempotent by run id)
-$comments = Invoke-RestMethod -Uri "$base/issues/18/comments?since=2026-10-03T00:00:00Z&per_page=50" -Headers $h
-$verdictComments = @($comments) | Where-Object { $_.body -like '*post-Oct-3 verifier*' }
+$comments = Invoke-RestMethod -Uri "$base/issues/$issue/comments?since=$($watched.readsSince)&per_page=50" -Headers $h
+$verdictComments = @($comments) | Where-Object { $_.body -like "*$($watched.marker)*" }
 Write-Output "scheduled attempts on cron day: $($day.Count) (all completed)"
 $day | ForEach-Object { Write-Output ("  run " + $_.id + " -> " + $_.conclusion + " - " + $_.html_url) }
 Write-Output "#18 verifier comments since Oct 3: $($verdictComments.Count)"
@@ -81,9 +90,10 @@ if ($verdictComments.Count -eq 0) {
 # 3. Classify the LATEST verdict comment
 $latest = $verdictComments | Sort-Object created_at -Descending | Select-Object -First 1
 $verdict = $null
-if ($latest.body -match '\*\*(PASS_[A-Z_]+)\*\*') { $verdict = $Matches[1] }
-elseif ($latest.body -match '\*\*((ATTENTION|FAIL)_[A-Z_]+)\*\*') { $verdict = $Matches[1] }
-elseif ($latest.body -match '\*\*(CRON_NOT_FOUND)\*\*') { $verdict = $Matches[1] }
+# One shape, derived from the verifier's own declared vocabulary, instead of a
+# hand-ordered cascade that had to be kept in step with it. The capture group
+# yields the verdict token itself.
+if ($latest.body -match $watched.recordShape) { $verdict = $Matches[1] }
 Write-Output "── latest verdict comment ($($latest.created_at), $($latest.user.login)):"
 $latest.body -split "`n" | Where-Object { $_ -match 'verifier|Scheduled run|Snapshot commit|Push status|Snapshot on main|Live upstream|\*\*' } | ForEach-Object { Write-Output ("  " + $_.Trim()) }
 

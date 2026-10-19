@@ -37,6 +37,12 @@
 //                    file exists to catch, and on 2026-10-03 that failure
 //                    arrived wearing a green checkmark.
 //
+// A tripped sentinel gets one further question before it reaches the report: is
+// the gap it named STILL there? A run conclusion is a moment, but the condition
+// a sentinel watches is a fact about the durable record - so a trip is reported
+// only while the receipt it was waiting for is still absent, and retires by
+// itself once that receipt lands. See TRIPPERS.
+//
 // This script audits ITSELF too: heartbeat.yml's own cron is in the audited
 // set, so a dead heartbeat is caught by the drill/CI surface instead of
 // rotting silently.
@@ -50,6 +56,10 @@
 //   HEARTBEAT_DRY_RUN=1 node scripts/heartbeat-audit.mjs   # print, never post
 //   (GITHUB_TOKEN / VERIFY_TOKEN honored as fallback token sources; CI passes
 //   github.token, local runs use the CredMan token.)
+//   HEARTBEAT_GNOMON=<ISO instant> audit as if it were then (the lifecycle
+//   rehearsal only: honoured ONLY while the transport is a rehearsal's simulated
+//   world, because a faked clock on the real one would stamp and file a false
+//   report - see simulatedNow).
 //
 // Exit: 0 all healthy (or only NOT_YET_DUE notes), 1 findings that need
 //       attention (posted as one deduped comment on #18 unless dry-run).
@@ -60,9 +70,22 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const REPO = 'Creative-hub554/Base88Plus';
+// The repo, the record issue, the receipt contracts, the tripper contracts and
+// the auditor's own marker are DECLARED once, in scripts/verdict-contract.json,
+// and derived here. Nothing in this file restates a marker, a window or a
+// verdict shape: a second copy of a contract fact is a second answer waiting to
+// disagree with the first, which is how the verifiers ended up unable to
+// recognise their own records.
+import { AUDITOR_MARKER, ISSUE, RECEIPTS, REPO, TRIPPERS, simulatedNow } from './verdict-contract.mjs';
+
 const API = `https://api.github.com/repos/${REPO}`;
-const ISSUE = 18;
+
+// The auditor's own comment on #18, by its stable prefix. RECOGNISING the
+// auditor's prose is a safety property, not a formatting detail: this file
+// writes directly onto the issue it audits, so its own report is always in the
+// evidence - and prose ABOUT a problem is not evidence OF one. The value is the
+// contract's `auditorMarker`, so the recovery pass can apply the same rule.
+export const SELF_MARKER = AUDITOR_MARKER;
 const FORWARD_DAYS = 1500; // satisfiability horizon: full 4-year leap cycle + slack
 const LOOKBACK_DAYS = 62;  // backward walk horizon: weekly + monthly cadences
 
@@ -239,12 +262,24 @@ export function assessTrip({ contract, run }) {
       note: `ran and did not trip - ${contract.what} looked healthy at ${run.run_started_at || run.created_at}.`,
     };
   }
+  // What actually clears a trip is worth stating exactly, because the obvious
+  // guess is wrong: re-running the sentinel does NOT clear it. A satisfied
+  // sentinel is silent by design, so a green re-run leaves no trace for the
+  // next audit to read - the receipt the sentinel was waiting for is the only
+  // durable evidence, and that is what retirement is graded on
+  // (gradeTripClearance). Contracts that declare no clearance keep the old
+  // wording rather than promising a mechanism nothing implements.
+  const remedy = contract.cleared
+    ? ` It retires on its own once the receipt it was waiting for lands on #${ISSUE} - a comment ` +
+      `carrying \`${contract.cleared.marker}\` with a bold \`PASS_...\` verdict. A satisfied ` +
+      `sentinel run is silent, so re-running this one cannot clear it: record the receipt it named.`
+    : ` Fix what it named, then re-run the sentinel to clear.`;
   return {
     verdict: 'tripped',
     finding: `TRIPPED - run ${run.id} concluded \`${run.conclusion}\`, which for this sentinel is ` +
       `the report: ${contract.what}. The schedule is provably alive, so this is the opposite of a ` +
       `dead cron - the gap this sentinel exists to watch for is present right now. The evidence it ` +
-      `posted is on #${ISSUE}; fix what it named, then re-run the sentinel to clear.`,
+      `posted is on #${ISSUE};` + remedy,
   };
 }
 
@@ -270,7 +305,7 @@ export function reportAs(ra) {
 export function assessReceipt({ contract, run, comments, periodStartMs }) {
   if (!contract) return { verdict: 'no-contract' };
   if (!run || run.status !== 'completed') return { verdict: 'run-incomplete' };
-  const g = gradeReceipt(contract.marker, comments, periodStartMs);
+  const g = gradeReceipt(contract, comments, periodStartMs);
   if (g.verdict === 'receipted') {
     return {
       verdict: 'receipted',
@@ -322,10 +357,11 @@ export function formatLag(ms) {
 // trip. A sentinel that returns SATISFIED is silent by design, so giving one a
 // receipt would manufacture a permanent false positive. Absence from this table
 // is a real claim - "this workflow owes nobody a record" - not an oversight.
-export const RECEIPTS = {
-  'oct3-verify.yml': { marker: 'post-Oct-3 verifier', what: 'the Oct 3 verdict' },
-  'oct28-verify.yml': { marker: 'post-Oct-28 verifier', what: 'the Oct 28 promotion verdict' },
-};
+// Declared in scripts/verdict-contract.json and derived, not restated: each
+// verifier entry carries its marker, its `what`, and the SHAPE that separates
+// its record from prose about one. The shape is new here, and it closes a hole
+// this table used to have - a comment could quote the marker and be credited as
+// the receipt it was reporting missing.
 
 // The mirror image of RECEIPTS, and the third thing a scheduled run can mean.
 //
@@ -342,17 +378,11 @@ export const RECEIPTS = {
 // here: a sentinel that fires has proven the schedule is alive AND that the
 // condition it watches is present. Only one of those is worth reporting.
 //
-/**
- * Typed as a Record rather than left to inference: a pin asserts that the
- * verifier workflows are ABSENT from this table, and absence cannot be
- * expressed on an inferred literal type.
- *
- * @type {Record<string, { what: string }>}
- */
-export const TRIPPERS = {
-  'oct4-sentinel.yml': { what: 'the Oct 3 chain landed no receipt on #18' },
-  'oct29-sentinel.yml': { what: 'the Oct 28 promotion crons landed no receipt on #18' },
-};
+// Derived, like RECEIPTS. `cleared` is the half of the contract that keeps a trip
+// honest over time: the durable evidence that makes the trip's claim FALSE again
+// (gradeTripClearance).  It comes from the WITNESS - the chain each sentinel
+// declares it watches - so the marker it waits for, the window it reads and the
+// satisfied shape it recognises are that chain's declared values, not a copy.
 
 // Deliberately NOT listed: the verifier workflows. oct3/oct28-verify exit 0
 // even when they fail to record (the #129 bug), so their conclusion carries no
@@ -360,11 +390,90 @@ export const TRIPPERS = {
 // verifier-drill is a weekly self-test rather than a witness to one day's
 // chain, so a red drill is a finding about the drill, not about a schedule.
 
+// Is a filed trip STILL TRUE?
+//
+// A trip retires on the WITNESS's satisfied shape - the contract's
+// `satisfiedShape` for the chain the sentinel watches - because a PASS is the
+// only verdict that ends one of these mornings well: ATTENTION_, FAIL_ and
+// CRON_ are the same gap in another costume, and oct28's NO_DISPATCH_RUN means
+// the operator act is still undone. There is deliberately no global PASS shape
+// to drift from: the shape travels with the contract entry that declares it.
+//
+// A trip is raised by a run conclusion, and a conclusion is a moment. Run
+// 37183204922 concluded `failure` on 2026-10-04 because the Oct 3 chain had
+// recorded no receipt; that receipt was then recovered onto #18 on 2026-10-09
+// (comment 6073315277, PASS_REFRESHED) and the sentinel itself went green - and
+// the auditor would still have re-reported that one deleted-morning conclusion
+// every week for a year. A finding that outlives its gap is not caution; it is
+// the wallpaper that teaches a reader to skip the findings that are still real.
+//
+// So the receipt must have LANDED, inside the window the sentinel itself reads,
+// and NEWER than the trip that named it. Newer, because a trip is stale for
+// having been contradicted by later evidence, never for having been wrong when
+// it was filed: a receipt that predates the trip was either already inside the
+// sentinel's window - in which case the sentinel would not have tripped - or is
+// about some other day.
+//
+// A receipt only ever RETIRES a trip; it can never raise one. Its landing is
+// good news by definition, and this function has no branch that says otherwise.
+//
+// Pure and comment-shaped, so the decision that retires findings is testable
+// without the Issues API.
+export function gradeTripClearance(cleared, comments, filedAtMs) {
+  if (!cleared || !cleared.marker) return { verdict: 'no-clearance' };
+  // An unparseable trip time cannot establish "after", so it establishes
+  // nothing: the trip stands rather than retiring on a guess.
+  const floorMs = Number.isNaN(filedAtMs) ? Infinity : filedAtMs;
+  const sinceMs = Date.parse(cleared.since);
+  const landed = [];
+  for (const c of comments) {
+    if (!c || typeof c.body !== 'string') continue;
+    // The auditor is a reporter, never a witness. Its complaint quotes markers
+    // and verdicts by name, so without this line the report that a gap exists
+    // becomes the evidence that it is closed - the auditor talking itself out
+    // of its own finding.
+    if (c.body.includes(SELF_MARKER)) continue;
+    // The witness's own satisfied shape, or the trip cannot be retired at all:
+    // a contract that declares no way to be satisfied has no way to be cleared.
+    if (!cleared.shape) return { verdict: 'no-clearance' };
+    if (!c.body.includes(cleared.marker) || !cleared.shape.test(c.body)) continue;
+    const at = Date.parse(c.created_at);
+    if (Number.isNaN(at) || at < floorMs) continue;
+    if (!Number.isNaN(sinceMs) && at < sinceMs) continue; // outside the sentinel's own window
+    landed.push({ id: c.id, created_at: c.created_at });
+  }
+  if (landed.length === 0) return { verdict: 'standing' };
+  landed.sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+  return { verdict: 'superseded', count: landed.length, first: landed[0] };
+}
+
+// The decision main() actually makes about a trip, in the {verdict, note}
+// shape assessTrip uses so reportAs() routes it without knowing which is which.
+//
+// The note names the comment that contradicted the trip, for the reason the
+// rest of this file returns prose rather than booleans: a clear that cannot be
+// checked is indistinguishable from a clear that was never earned.
+export function assessTripStanding({ contract, run, comments }) {
+  if (!contract || !contract.cleared) return { verdict: 'no-clearance' };
+  const g = gradeTripClearance(contract.cleared, comments, Date.parse(run.run_started_at || run.created_at));
+  if (g.verdict !== 'superseded') return { verdict: 'standing' };
+  return {
+    verdict: 'superseded',
+    note: `the trip filed by run ${run.id} (${run.run_started_at || run.created_at}) is stale: ` +
+      `${contract.what} no longer holds - comment ${g.first.id} (${g.first.created_at}) carries ` +
+      `\`${contract.cleared.marker}\` with a bold PASS verdict, recorded after the trip. Reporting ` +
+      `it again would re-file a gap that is already repaired; no action is owed here.`,
+  };
+}
+
 // Did the promised record actually land, for the period this audit covers?
 //
-// `comments` is every comment on the record issue, unfiltered; the two tests
-// that matter are the marker (this workflow kept its promise) and the window
-// (it kept it about THIS period, not about a day last month).
+// `comments` is every comment on the record issue, unfiltered; the three tests
+// that matter are the marker (this workflow kept its promise), the SHAPE (it
+// posted a record, not prose about one), and the window (it kept it about THIS
+// period, not about a day last month). The shape is per workflow because the
+// vocabulary is: oct28-verify posts NO_DISPATCH_RUN and PRE_PROMO_* by design,
+// so one global regex cannot both see that record and miss a complaint.
 //
 // The window starts at the FIRST due slot of the period, not the most recent
 // one. The Oct 28 chain declares four retries for one morning: a verdict
@@ -374,11 +483,21 @@ export const TRIPPERS = {
 // the whole day, a slot is about one moment.
 //
 // Pure and comment-shaped so it is testable without the Issues API.
-export function gradeReceipt(marker, comments, periodStartMs) {
-  if (!marker) return { verdict: 'no-contract' };
+export function gradeReceipt(contract, comments, periodStartMs) {
+  if (!contract || !contract.marker) return { verdict: 'no-contract' };
+  const { marker } = contract;
   const landed = [];
   for (const c of comments) {
     if (!c || typeof c.body !== 'string' || !c.body.includes(marker)) continue;
+    if (contract.shape && !contract.shape.test(c.body)) continue;
+    // ...and the auditor is not its own witness here either. Its complaint
+    // quotes the missing marker verbatim, so crediting it lets the report that
+    // a verdict is MISSING become the proof that it landed: the Oct 3 verdict
+    // stopped being reported on 2026-10-05 by the very comment announcing it
+    // was gone, and would have stayed silent for the three days until the
+    // receipt actually landed. A prophylactic satisfied by a description of the
+    // condition it prevents is not a prophylactic.
+    if (c.body.includes(SELF_MARKER)) continue;
     const at = Date.parse(c.created_at);
     if (Number.isNaN(at) || at < periodStartMs) continue; // about some other day
     landed.push({ id: c.id, created_at: c.created_at });
@@ -525,7 +644,7 @@ function extractCrons(text) {
 
 // ------------------------------------------------------------------- main
 async function main() {
-  const now = Date.now();
+  const now = simulatedNow('HEARTBEAT_GNOMON');
   const findings = [];
   const notes = [];
 
@@ -633,13 +752,20 @@ async function main() {
   // #18 comments are fetched at most once, and only if some row could need
   // them. A healthy audit of event-driven workflows must not pay for an
   // Issues call it will never read.
-  let recordComments = null;
-  const comments = async () => {
-    if (recordComments === null) {
-      recordComments = await api(`/issues/${ISSUE}/comments?per_page=100`);
-      if (!Array.isArray(recordComments)) recordComments = [];
+  // Comments are fetched lazily and cached PER QUERY. The receipt check reads
+  // the whole issue; a tripper reads the narrower window its own sentinel read
+  // (`since=`) and must not be handed the other list - a verdict from outside
+  // that window is not evidence about the morning the sentinel was watching.
+  const commentCache = new Map();
+  const comments = async (since) => {
+    const key = since || '';
+    if (!commentCache.has(key)) {
+      const query = since ? `?since=${encodeURIComponent(since)}&per_page=100` : '?per_page=100';
+      let list = await api(`/issues/${ISSUE}/comments${query}`);
+      if (!Array.isArray(list)) list = [];
+      commentCache.set(key, list);
     }
-    return recordComments;
+    return commentCache.get(key);
   };
   const receiptRows = receiptTargets(rows);
   for (const row of rows) {
@@ -661,7 +787,16 @@ async function main() {
       // any-conclusion-counts-as-fired rule used to discard.
       const trip = assessTrip({ contract: row.tripper, run: okRun });
       if (reportAs(trip) === 'finding') {
-        findings.push(`\`${label}\` cron \`${expr}\` ${trip.finding}`);
+        // The run conclusion RAISED the trip; the durable record decides
+        // whether it still stands, so a repaired gap stops being re-filed
+        // every week for a year (see gradeTripClearance).
+        const standing = await assessTripStanding({
+          contract: row.tripper,
+          run: okRun,
+          comments: row.tripper?.cleared ? await comments(row.tripper.cleared.since) : [],
+        });
+        if (reportAs(standing) === 'note') notes.push(`\`${label}\` ${standing.note}`);
+        else findings.push(`\`${label}\` cron \`${expr}\` ${trip.finding}`);
         continue;
       }
       const ra = receiptRows.includes(row)
@@ -711,12 +846,14 @@ async function main() {
     process.exit(0);
   }
 
-  const body = `Weekly schedule heartbeat (${stamp}): **${findings.length} finding(s)** - a schedule looks dead or disabled.` +
+  // Built from SELF_MARKER rather than retyped: gradeTripClearance has to
+  // recognise this exact prefix or the auditor would start trusting its own
+  // prose as a witness.
+  const marker = `${SELF_MARKER}${stamp})`;
+  const body = `${marker}: **${findings.length} finding(s)** - a schedule looks dead or disabled.` +
     `\n\n${findings.map((f) => `- ${f}`).join('\n')}` +
     (notes.length ? `\n\n<details><summary>Healthy / not-yet-due / inside the queue grace (${notes.length})</summary>\n\n${notes.map((n) => `- ${n}`).join('\n')}\n\n</details>` : '') +
     `\nAudit run: ${process.env.GITHUB_SERVER_URL || 'https://github.com'}/${REPO}/actions/runs/${process.env.GITHUB_RUN_ID || '<local>'}`;
-
-  const marker = `Weekly schedule heartbeat (${stamp})`;
   const prior = await api(`/issues/${ISSUE}/comments?since=${new Date(now - 8 * 86400000).toISOString()}&per_page=50`);
   if (Array.isArray(prior) && prior.some((c) => c.body && c.body.includes(marker))) {
     console.log(`ALREADY_RECORDED (${marker})`);

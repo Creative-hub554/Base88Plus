@@ -1,0 +1,18 @@
+REHEARSAL fixture=sentinel-rehearsal.json scenarios=16
+REHEARSAL OK   oct29: refuses to judge before its own day
+REHEARSAL OK   oct29: none of the four promotion crons fired
+REHEARSAL OK   oct29: an attempt is still running on sentinel morning
+REHEARSAL OK   oct29: the chain fired and recorded nothing at all
+REHEARSAL OK   oct29: promotion day ended with NO_DISPATCH_RUN
+REHEARSAL OK   oct29: a PASS landed, so the trip never happens
+REHEARSAL OK   oct29: a later FAIL outranks an earlier PASS
+REHEARSAL OK   oct29: a PASS recorded BEFORE promotion day does not clear it
+REHEARSAL OK   oct29: #18 closed on promotion day is the mission accomplished
+REHEARSAL OK   oct29: #18 closed BEFORE the chain ran does not blind the sentinel
+REHEARSAL OK   oct29: the day's gap is already recorded, so it is not filed twice
+REHEARSAL OK   oct4: no scheduled attempt ever fired
+REHEARSAL OK   oct4: the chain fired but #18 carried no verdict (the real 2026-10-04 state)
+REHEARSAL OK   oct4: the recovered PASS clears the trip (the real 2026-10-09 state)
+REHEARSAL OK   oct4: an attempt is still running on sentinel morning
+REHEARSAL OK   oct4: the gap is already recorded, so it is not filed twice
+REHEARSAL_DONE scenarios=16 failed=0 roundtrip=10 recognised=8

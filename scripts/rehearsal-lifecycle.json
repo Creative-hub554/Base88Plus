@@ -1,0 +1,400 @@
+{
+  "_about": [
+    "The record lifecycle, rehearsed in ONE world: computed -> filed -> lost -> recovered -> retired.",
+    "",
+    "Four tools keep this repo honest and they are a CHAIN, not four islands:",
+    "  - a VERIFIER computes a verdict on its cron day and posts it to #18 (verify-oct3.ps1);",
+    "  - the day-after SENTINEL trips when that day's receipt never landed (oct4-sentinel.ps1);",
+    "  - the HEARTBEAT AUDITOR asks whether a completed run that owed a record recorded it",
+    "    (heartbeat-audit.mjs);",
+    "  - the RECOVERY PASS re-posts a record from the run's own artifact before it expires",
+    "    (recover-verdicts.mjs).",
+    "",
+    "Each tool had its own rehearsal and each rehearsal built its own little world, so the thing",
+    "that actually fails in production - a handoff BETWEEN two of them - had nowhere to be",
+    "exercised. scripts/rehearse-lifecycle.mjs runs all four against the ONE world declared here",
+    "(scripts/rehearse-world.mjs is its only interpreter, in either language) and stops at the",
+    "first step whose handoff does not hold.",
+    "",
+    "WHICH CHAIN. This is the Oct 3 chain, because its record went through all five states for",
+    "real. The Oct 28 promotion chain is the same shape but not the same story - its verdicts are",
+    "NO_DISPATCH_RUN and PRE_PROMO_* before the operator's dispatch, and closing #18 is an",
+    "operator act - so its states live in the sentinel rehearsal (both oct29 trip paths and its",
+    "clear path) and in the recovery pass's own pins, not here.",
+    "",
+    "THE TIMELINE IS THE REAL ONE, COMPRESSED. The Oct 3 chain really fired three times, really",
+    "derived PASS_REFRESHED three times, and really recorded none of it: oct3-verify.yml was the",
+    "one workflow posting to #18 without `issues: write`, so every POST came back 403 and every",
+    "run exited 0 on the strength of the verdict it had failed to file. The Oct 4 sentinel really",
+    "tripped on the morning after. The verdict was really recovered out of the run's artifact -",
+    "by hand, six days later, which is why the recovery pass exists. The only liberty taken here",
+    "is the clock: the recovery runs hours after the gap is noticed rather than days, because what",
+    "is being rehearsed is the HANDOFF (who reads whose output) and not the six days a human took.",
+    "",
+    "THE WORLD IS A SUBSET, DELIBERATELY. `world.workflows` registers the five workflows these four",
+    "tools can name - the auditor audits what the API LISTS, and the recovery pass enumerates the",
+    "contract's own RECOVERABLE set - but it is not the repo's whole scheduled fleet, and it gives",
+    "no runs to the chains whose days have not arrived (their slots are simply not yet due). The",
+    "seeded facts are the real ones where the chain HAS already happened -",
+    "run 37123382655 is the ci.yml cron the verdict names, 37123811425/37129011940/37157439771 are",
+    "the three oct3-verify attempts - so a step that reads them reads history, not a story.",
+    "",
+    "Each step names its ACTOR (who might run it), the CLOCK (what day the world is having) and",
+    "what must be true afterwards. `expect.recordLine` is the record's identity AND its verdict",
+    "as one line: the text the script writes, the text the recovery pass searches for, and the",
+    "text the heartbeat audits against - all three rendered from scripts/verdict-contract.json.",
+    "tests/rehearsal-lifecycle.test.ts holds these literals to the declaration, so a rehearsal",
+    "cannot pass while a script and the loader disagree about what a record is called."
+  ],
+  "world": {
+    "issue": {
+      "number": 18,
+      "state": "open",
+      "title": "Oct 3 cron-day verdict",
+      "closed_at": null
+    },
+    "workflows": [
+      {
+        "file": "ci.yml",
+        "name": "CI",
+        "path": ".github/workflows/ci.yml",
+        "state": "active",
+        "created_at": "2026-08-01T00:00:00Z"
+      },
+      {
+        "file": "oct3-verify.yml",
+        "name": "Oct 3 verifier",
+        "path": ".github/workflows/oct3-verify.yml",
+        "state": "active",
+        "created_at": "2026-08-01T00:00:00Z"
+      },
+      {
+        "file": "oct4-sentinel.yml",
+        "name": "Oct 4 sentinel",
+        "path": ".github/workflows/oct4-sentinel.yml",
+        "state": "active",
+        "created_at": "2026-08-01T00:00:00Z"
+      },
+      {
+        "file": "oct28-verify.yml",
+        "name": "Oct 28 verifier",
+        "path": ".github/workflows/oct28-verify.yml",
+        "state": "active",
+        "created_at": "2026-08-01T00:00:00Z"
+      },
+      {
+        "file": "oct29-sentinel.yml",
+        "name": "Oct 29 sentinel",
+        "path": ".github/workflows/oct29-sentinel.yml",
+        "state": "active",
+        "created_at": "2026-08-01T00:00:00Z"
+      }
+    ],
+    "post": {
+      "deny": ["oct3-verify-workflow-token"]
+    },
+    "comments": [],
+    "pulls": [],
+    "contents": {
+      "scripts/node-schedule.json": {
+        "type": "file",
+        "name": "node-schedule.json",
+        "path": "scripts/node-schedule.json",
+        "sha": "b7a1e5f0c3d94a26b8e15c7d0f3a9b2c6d4e8f10",
+        "size": 4096,
+        "json": {
+          "_fetchedAt": "2026-10-03T07:12:00Z",
+          "schedule": {
+            "v22": { "start": "2022-04-19", "lts": "2022-10-25", "maintenance": "2025-04-01", "end": "2027-04-30" },
+            "v24": { "start": "2024-04-24", "lts": "2024-10-29", "maintenance": "2026-04-01", "end": "2028-04-30" },
+            "v26": { "start": "2026-04-15", "lts": "2026-10-28", "maintenance": "2027-10-01", "end": "2029-04-30" }
+          }
+        }
+      }
+    },
+    "commits": {
+      "scripts/node-schedule.json": [
+        {
+          "sha": "9f2c41ab77de5c0f8a1b3d6e0c9274a5b8d1e3f6",
+          "author": { "login": "github-actions[bot]" },
+          "commit": {
+            "author": { "name": "github-actions[bot]", "email": "41898282+github-actions[bot]@users.noreply.github.com", "date": "2026-10-03T07:34:07Z" },
+            "message": "chore: refresh node-schedule.json from nodejs.org [skip ci]"
+          }
+        }
+      ]
+    },
+    "runs": [
+      {
+        "id": 37123382655,
+        "workflow": "ci.yml",
+        "event": "schedule",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-10-03T07:17:12Z",
+        "run_started_at": "2026-10-03T07:17:12Z",
+        "html_url": "https://github.com/Creative-hub554/Base88Plus/actions/runs/37123382655"
+      },
+      {
+        "id": 37123811425,
+        "workflow": "oct3-verify.yml",
+        "event": "schedule",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-10-03T12:43:49Z",
+        "run_started_at": "2026-10-03T12:43:49Z",
+        "html_url": "https://github.com/Creative-hub554/Base88Plus/actions/runs/37123811425"
+      },
+      {
+        "id": 37129011940,
+        "workflow": "oct3-verify.yml",
+        "event": "schedule",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-10-03T14:15:51Z",
+        "run_started_at": "2026-10-03T14:15:51Z",
+        "html_url": "https://github.com/Creative-hub554/Base88Plus/actions/runs/37129011940"
+      },
+      {
+        "id": 37157439771,
+        "workflow": "oct3-verify.yml",
+        "event": "schedule",
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-10-03T22:08:49Z",
+        "run_started_at": "2026-10-03T22:08:49Z",
+        "html_url": "https://github.com/Creative-hub554/Base88Plus/actions/runs/37157439771"
+      },
+      {
+        "id": 99000000401,
+        "workflow": "oct4-sentinel.yml",
+        "event": "schedule",
+        "status": "completed",
+        "conclusion": "failure",
+        "created_at": "2026-10-04T01:00:09Z",
+        "run_started_at": "2026-10-04T01:00:09Z",
+        "html_url": "https://github.com/Creative-hub554/Base88Plus/actions/runs/99000000401"
+      }
+    ],
+    "run_detail": {
+      "37123382655": {
+        "jobs": [
+          {
+            "id": 99000000111,
+            "name": "matrix",
+            "status": "completed",
+            "conclusion": "success",
+            "steps": [
+              { "name": "Refresh the committed schedule snapshot from nodejs.org", "conclusion": "success" },
+              { "name": "Commit the refreshed snapshot with the deploy key", "conclusion": "success" }
+            ]
+          },
+          { "id": 99000000112, "name": "gates (22)", "status": "completed", "conclusion": "success", "steps": [] },
+          { "id": 99000000113, "name": "gates (24)", "status": "completed", "conclusion": "success", "steps": [] },
+          { "id": 99000000114, "name": "ci-ok", "status": "completed", "conclusion": "success", "steps": [] }
+        ]
+      },
+      "99000000401": {
+        "jobs": [
+          { "id": 99000000411, "name": "sentinel", "status": "completed", "conclusion": "failure", "steps": [] }
+        ]
+      }
+    },
+    "artifacts": [
+      { "id": 99000000201, "run": 37123382655, "name": "snapshot-push-ok", "size_in_bytes": 12, "expired": false }
+    ]
+  },
+  "steps": [
+    {
+      "phase": "computed",
+      "name": "computed: the verifier derives the verdict and cannot file it",
+      "about": [
+        "The cron day. The verifier finds the scheduled ci.yml run and the snapshot commit,",
+        "derives PASS_REFRESHED, composes the record, prints it - and the POST comes back 403,",
+        "because this workflow (and only this one) posts to #18 without `issues: write`. It exits",
+        "0 anyway: the verdict is real, so the job is green and the record is nowhere."
+      ],
+      "actor": "verify-oct3",
+      "clock": "2026-10-03T12:43:49Z",
+      "gnomon": "2026-10-03",
+      "token": "oct3-verify-workflow-token",
+      "expect": {
+        "exit": 0,
+        "stdout": ["SIMULATED_WORLD", "RUN id=37123382655 conclusion=success", "VERDICT=PASS_REFRESHED", "COMMENT_FAILED Response status code does not indicate success: 403"],
+        "record": { "workflow": "oct3-verify.yml", "run": 37123382655, "day": "2026-10-03", "verdict": "PASS_REFRESHED" },
+        "recordLine": "post-Oct-3 verifier (run 37123382655, 2026-10-03): **PASS_REFRESHED**",
+        "postAttempted": true,
+        "commentsAdded": 0
+      }
+    },
+    {
+      "phase": "filed",
+      "name": "filed: the workflow uploads the run log the record lives in",
+      "about": [
+        "The record's only durable home: `pwsh ... | tee oct3-verify.log`, the exit line appended,",
+        "uploaded as the oct3-verify-log artifact. This step plays the workflow (the rehearsal is a",
+        "runner here, not a tool) for all three attempts, and then asks the recovery pass's own",
+        "parser to rebuild the record out of that artifact - because \"recoverable\" is a property of",
+        "the artifact, and nothing else about this step can establish it."
+      ],
+      "actor": "upload",
+      "clock": "2026-10-03T12:43:52Z",
+      "from": "computed: the verifier derives the verdict and cannot file it",
+      "workflow": "oct3-verify.yml",
+      "verdict": "PASS_REFRESHED",
+      "artifact": "oct3-verify-log",
+      "log": "oct3-verify.log",
+      "runs": [37123811425, 37129011940, 37157439771],
+      "expect": {
+        "roundtrip": true,
+        "artifactsOn": [37123811425, 37129011940, 37157439771]
+      }
+    },
+    {
+      "phase": "lost",
+      "name": "lost: the day-after sentinel trips on the missing receipt",
+      "about": [
+        "Oct 4 01:00, the sentinel's own morning. Three scheduled attempts fired and concluded",
+        "success, and no comment on #18 carries a PASS verdict - so the sentinel does what it was",
+        "built to do: it files the gap. This is the real 2026-10-04 state.",
+        "Needs no DRY_RUN: the transport is the simulated world, which is where the trip belongs.",
+        "The clock sits seconds AFTER the run's own created_at (01:00:09) on purpose: the trip is",
+        "that run's record, and the recovery pass will not read a receipt created before the run it",
+        "belongs to (isReceipted). A world that dated the record earlier would leave the sentinel's",
+        "own run looking like a lost record, and the pass would say so - which is how this step",
+        "found that rule the first time it ran."
+      ],
+      "actor": "oct4-sentinel",
+      "clock": "2026-10-04T01:00:12Z",
+      "gnomon": "2026-10-04",
+      "token": "rehearsal-token-never-sent",
+      "expect": {
+        "exit": 1,
+        "stdout": ["scheduled oct3-verify.yml attempts in 2026-10-03..2026-10-04: 3", "#18 verifier comments since Oct 3: 0 (PASS: 0)", "VERDICT=SENTINEL_RUN_NO_PASS", "COMMENT_POSTED id="],
+        "record": { "workflow": "oct4-sentinel.yml", "run": "none", "day": "2026-10-04", "verdict": "SENTINEL_RUN_NO_PASS" },
+        "recordLine": "post-Oct-3 sentinel (checked 2026-10-04): **SENTINEL_RUN_NO_PASS**",
+        "postAttempted": true,
+        "commentsAdded": 1
+      }
+    },
+    {
+      "phase": "lost",
+      "name": "lost: the auditor says the run owed a record and never recorded it",
+      "about": [
+        "The same world, seen by the other witness. The auditor reads the run list: a completed",
+        "scheduled oct3-verify run started after its due slot, and the receipt contract promises a",
+        "record for that period - and there is none. It says so on #18, in its own words, and its",
+        "comment must NOT count as the record: this diary entry is the exact shape of a comment",
+        "that can satisfy a careless receipt test (the 2026-10-05 heartbeat comment quoted the",
+        "marker while reporting the record missing). The step asserts the pass still finds the run",
+        "unreceipted after the auditor has spoken."
+      ],
+      "actor": "heartbeat",
+      "chain": "oct3-verify.yml",
+      "clock": "2026-10-04T12:00:00Z",
+      "gnomon": "2026-10-04T12:00:00Z",
+      "expect": {
+        "exit": 1,
+        "stdout": ["HEARTBEAT_AUDIT 2026-10-04 workflows=5 findings=2", "was never recorded on #18", "TRIPPED", "COMMENT_POSTED id="],
+        "findings": 2,
+        "commentsAdded": 1,
+        "auditorCommentIsNotARecord": true
+      }
+    },
+    {
+      "phase": "recovered",
+      "name": "recovered: the pass re-posts the record from the artifact",
+      "about": [
+        "The recovery pass enumerates the chain's scheduled runs inside the retention window,",
+        "finds every one of them unreceipted, reads each run's own artifact, and re-posts the",
+        "record. Three attempts computed one day's verdict, so ONE record is what may land: a",
+        "receipt recorded after a run covers that run, which is the contract's own rule and the",
+        "reason a retry chain is one comment and not three."
+      ],
+      "actor": "recover",
+      "chain": "oct3-verify.yml",
+      "clock": "2026-10-04T12:15:00Z",
+      "gnomon": "2026-10-04T12:15:00Z",
+      "expect": {
+        "exit": 0,
+        "stdout": [
+          "oct3-verify.yml: 3 scheduled run(s) inside retention, 3 without a record",
+          "run 37123811425: RECOVERED PASS_REFRESHED from oct3-verify-log",
+          "oct4-sentinel.yml: 1 scheduled run(s) inside retention (only tripped runs owe a record), 0 without a record",
+          "RECOVER_RECORDS issue=#18 dry=false recovered=1 unrecoverable=0"
+        ],
+        "record": { "workflow": "oct3-verify.yml", "run": 37123382655, "day": "2026-10-03", "verdict": "PASS_REFRESHED" },
+        "recordLine": "post-Oct-3 verifier (run 37123382655, 2026-10-03): **PASS_REFRESHED**",
+        "commentsAdded": 1,
+        "matchesRoundTrip": true,
+        "unreceiptedAfter": 0
+      }
+    },
+    {
+      "phase": "recovered",
+      "name": "recovered: a second pass finds nothing left to recover",
+      "about": [
+        "The pass's own idempotence, asked of the world it just changed. A record that returns and",
+        "then returns again is the duplicate-record failure this contract exists to prevent, so the",
+        "second run must post nothing at all."
+      ],
+      "actor": "recover",
+      "chain": "oct3-verify.yml",
+      "clock": "2026-10-04T12:20:00Z",
+      "gnomon": "2026-10-04T12:20:00Z",
+      "expect": {
+        "exit": 0,
+        "stdout": ["oct3-verify.yml: 3 scheduled run(s) inside retention, 0 without a record", "RECOVER_RECORDS issue=#18 dry=false recovered=0 unrecoverable=0"],
+        "commentsAdded": 0
+      }
+    },
+    {
+      "phase": "retired",
+      "name": "retired: the auditor grades the trip stale and the receipt landed",
+      "about": [
+        "The handoff that closes the loop. The sentinel's trip run (Oct 4 01:00) is still the",
+        "latest run for its slot, but the receipt it was waiting for landed at 12:15 - so the",
+        "auditor reports the Oct 3 verdict as recorded (naming the very comment the pass posted)",
+        "and the trip as STALE rather than re-filing a gap that is already repaired. No findings.",
+        "The world's clock moves 15 minutes and the same tools that reported two findings an hour",
+        "ago report none."
+      ],
+      "actor": "heartbeat",
+      "chain": "oct3-verify.yml",
+      "clock": "2026-10-04T12:30:00Z",
+      "gnomon": "2026-10-04T12:30:00Z",
+      "expect": {
+        "exit": 0,
+        "stdout": ["HEARTBEAT_AUDIT 2026-10-04 workflows=5 findings=0", "is stale", "HEARTBEAT_HEALTHY"],
+        "findings": 0,
+        "commentsAdded": 0,
+        "mentionsRecoveredComment": true
+      }
+    },
+    {
+      "phase": "retired",
+      "name": "retired: the sentinel stands down",
+      "about": [
+        "And the sentinel that filed the gap, run again against the same world, finds the record",
+        "it was waiting for and stands down - naming the comment the recovery pass posted. The",
+        "script that wrote the original record, the pass that rebuilt it, and the alarm it was the",
+        "witness for all agree about one comment on one issue: that is the lifecycle.",
+        "No DRY_RUN and no fixture comment: the record it recognises is the one this run recovered.",
+        "Its comment count reads 2/PASS 1, not 1/1: the auditor's report QUOTES the verifier's",
+        "marker while saying the record is missing, and a marker is not a verdict - the PASS count",
+        "(what the sentinel actually acts on) is the one that has to be 1."
+      ],
+      "actor": "oct4-sentinel",
+      "clock": "2026-10-04T12:35:00Z",
+      "gnomon": "2026-10-04",
+      "token": "rehearsal-token-never-sent",
+      "expect": {
+        "exit": 0,
+        "stdout": ["#18 verifier comments since Oct 3: 2 (PASS: 1)", "SENTINEL_OK latest PASS from run comment"],
+        "postAttempted": false,
+        "commentsAdded": 0,
+        "mentionsRecoveredComment": true
+      }
+    }
+  ]
+}

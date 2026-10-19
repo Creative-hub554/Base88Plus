@@ -67,21 +67,41 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/**
+ * `delay: null` is load-bearing, not a style choice.
+ *
+ * user-event defaults to `delay: 0`, and that is not "no delay" — it is a
+ * real `setTimeout(resolve, 0)` awaited between EVERY keystroke
+ * (user-event/dist/cjs/utils/misc/wait.js). These tests type 56 characters,
+ * so the happy path burned ~60 event-loop round trips whose wall time is
+ * entirely at the mercy of scheduler contention. Measured on an idle box the
+ * first test took 1.27s of which almost all was that waiting; run in parallel
+ * (12 test files against 12 cores, plus any other load on the machine) each
+ * hop stretches and the total sails past vitest's 5s per-test timeout — which
+ * is exactly the "pure 5s timeout" failure this suite showed. `delay: null`
+ * makes `wait()` return without scheduling (same file, the `typeof delay !==
+ * 'number'` branch), so the interactions still fire as real per-key input
+ * events but no longer race the clock. Nothing about what is asserted changes.
+ */
 async function renderSection() {
+  const user = userEvent.setup({ delay: null });
   render(<DeploySection projectId="p1" viewingVersion={null} onViewVersion={() => {}} />);
-  await screen.findByLabelText("Cloudflare Account ID");
+  // The connect form renders synchronously (status is null ⇒ connected is
+  // false), so this is a presence assertion, not a wait.
+  screen.getByLabelText("Cloudflare Account ID");
+  return user;
 }
 
 describe("DeploySection — connect contract", () => {
   it("posts both credential fields on connect (command, not merge)", async () => {
-    await renderSection();
+    const user = await renderSection();
 
-    await userEvent.type(screen.getByLabelText("Cloudflare Account ID"), "a".repeat(32));
-    await userEvent.type(
+    await user.type(screen.getByLabelText("Cloudflare Account ID"), "a".repeat(32));
+    await user.type(
       screen.getByLabelText("Cloudflare API token"),
       "cf-token-0123456789abcdef",
     );
-    await userEvent.click(screen.getByRole("button", { name: "Connect Cloudflare" }));
+    await user.click(screen.getByRole("button", { name: "Connect Cloudflare" }));
 
     await waitFor(() => expect(screen.getByText("connected")).toBeTruthy());
     const posts = calls.filter(
@@ -102,15 +122,15 @@ describe("DeploySection — connect contract", () => {
   });
 
   it("surfaces the verification error verbatim and keeps the token for retry", async () => {
-    await renderSection();
+    const user = await renderSection();
     failConnect = true;
 
-    await userEvent.type(screen.getByLabelText("Cloudflare Account ID"), "a".repeat(32));
-    await userEvent.type(
+    await user.type(screen.getByLabelText("Cloudflare Account ID"), "a".repeat(32));
+    await user.type(
       screen.getByLabelText("Cloudflare API token"),
       "cf-bad-token-0123456789",
     );
-    await userEvent.click(screen.getByRole("button", { name: "Connect Cloudflare" }));
+    await user.click(screen.getByRole("button", { name: "Connect Cloudflare" }));
 
     await waitFor(() => expect(screen.getByText("Invalid API token")).toBeTruthy());
     expect(

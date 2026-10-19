@@ -5,6 +5,8 @@ commit, and records the outcome on issue #18.
 Usage:  powershell -NoProfile -ExecutionPolicy Bypass -File .freebuff/verify-oct3.ps1
 Env:    VERIFY_TOKEN=<tok>  token override (CI drill / non-Windows); default is the
                         Windows Credential Manager entry gh:github.com:Creative-hub554
+        VERIFY_GNOMON=yyyy-MM-dd  fake today (deterministic rehearsal: the gate,
+                        and the day the record is dated)
         VERIFY_FORCE=1  bypass the date gate (plumbing tests only)
         DRY_RUN=1       print the #18 comment instead of posting it
 Exit:   0 pass/in-progress, 1 attention/fail, 2 date gate refused
@@ -40,20 +42,36 @@ public class CredMan {
 $tok = if ($env:VERIFY_TOKEN) { $env:VERIFY_TOKEN } else { [CredMan]::Read('gh:github.com:Creative-hub554') }
 if (-not $tok) { Write-Output 'NO_TOKEN'; exit 1 }
 $h = @{ Authorization = "Bearer $tok"; Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' }
-$base = 'https://api.github.com/repos/Creative-hub554/Base88Plus'
+# --- 0. the contract (scripts/verdict-contract.json) ---
+# The marker this script writes, the window it scans, the header that identifies
+# one of its records and the day it records on are all declared once, for the
+# recovery pass and the heartbeat auditor to read too. Restating any of them here
+# is what let this script search for a string it never wrote.
+. (Join-Path $PSScriptRoot 'verdict-contract.ps1')
+$contract = Get-VerdictContract
+$record = Get-VerdictRecord -Contract $contract -ScriptPath $PSCommandPath
+$base = "https://api.github.com/repos/$($contract.repo)"
+$issue = $contract.issue
+$windowEnd = ([datetime]$record.recordsOn).AddDays(1).ToString('yyyy-MM-dd')
 
 # --- 1. date gate ---
-$today = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
-# The date-gate override exists for plumbing rehearsals - a forced run can
-# produce a verdict that is FALSE on the real calendar, so posting must stay
-# impossible whenever it is set (guard added after an oct4-sentinel gnomon
-# rehearsal posted a false alarm onto #18 on 2026-09-30).
-if ($env:VERIFY_FORCE -eq '1') {
-  $env:DRY_RUN = '1'
-  Write-Output 'FORCED_DRY_RUN (VERIFY_FORCE set - rehearsals never post)'
+# VERIFY_GNOMON=yyyy-MM-dd fakes today - the same seam the two sentinels and the
+# Oct 28 verifier already have. A rehearsal that is modelling a cron day has to be
+# able to say which day that is, or the script derives a record dated the day the
+# rehearsal ran and the timeline under test is some other timeline.
+$today = if ($env:VERIFY_GNOMON) { $env:VERIFY_GNOMON } else { (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd') }
+# A faked calendar must not be able to file a record on GitHub; the transport, not
+# the date, decides whether it can (see Test-VerdictSimulatedTransport).
+if ($env:VERIFY_FORCE -eq '1' -or $env:VERIFY_GNOMON) {
+  if (Test-VerdictSimulatedTransport) {
+    Write-Output 'SIMULATED_WORLD (faked date + rehearsal transport - a record filed here lands in the simulated world, never on GitHub)'
+  } else {
+    $env:DRY_RUN = '1'
+    Write-Output 'FORCED_DRY_RUN (VERIFY_FORCE/VERIFY_GNOMON set - rehearsals never post)'
+  }
 }
-if ($today -lt '2026-10-03' -and $env:VERIFY_FORCE -ne '1') {
-  Write-Output "REFUSED_DATE_GATE today=$today cron fires 2026-10-03T07:17Z (VERIFY_FORCE=1 overrides for plumbing tests)"; exit 2
+if ($today -lt $record.recordsOn -and $env:VERIFY_FORCE -ne '1') {
+  Write-Output "REFUSED_DATE_GATE today=$today cron fires $($record.recordsOn)T07:17Z (VERIFY_FORCE=1 or VERIFY_GNOMON=... overrides for plumbing tests)"; exit 2
 }
 
 # --- 2. scheduled run (SMOKE_RUN_ID=<id> inspects a specific run; always dry) ---
@@ -63,20 +81,20 @@ if ($smoke) {
   $run = Invoke-RestMethod -Uri "$base/actions/runs/$smoke" -Headers $h
   Write-Output "SMOKE inspecting run $($run.id) event=$($run.event) created=$($run.created_at) url=$($run.html_url)"
 } else {
-  $runs = Invoke-RestMethod -Uri "$base/actions/workflows/ci.yml/runs?event=schedule&created=2026-10-03..2026-10-04&per_page=10" -Headers $h
+  $runs = Invoke-RestMethod -Uri "$base/actions/workflows/ci.yml/runs?event=schedule&created=$($record.recordsOn)..$windowEnd&per_page=10" -Headers $h
   $run = $runs.workflow_runs | Sort-Object created_at -Descending | Select-Object -First 1
 }
 if (-not $run) {
   $wf = Invoke-RestMethod -Uri "$base/actions/workflows/ci.yml" -Headers $h
   $verdict = 'CRON_NOT_FOUND'
-  $comment = "post-Oct-3 verifier (run none, $today): NO scheduled CI run found in the 2026-10-03..2026-10-04 window. ci.yml workflow state: $($wf.state). If 'disabled_manually' or 'disabled_inactivity', re-enable via Settings - Actions or a repo activity push, then investigate why it was disabled."
-  Write-Output "VERDICT=$verdict"
+  $comment = "$(Format-VerdictHeader -Record $record -Day $today): NO scheduled CI run found in the $($record.recordsOn)..$windowEnd window. ci.yml workflow state: $($wf.state). If 'disabled_manually' or 'disabled_inactivity', re-enable via Settings - Actions or a repo activity push, then investigate why it was disabled."
+  Write-Output "$($contract.logSyntax.verdict)$verdict"
 } elseif ($run.status -ne 'completed') {
   Write-Output "RUN_IN_PROGRESS url=$($run.html_url) - re-run this script later"; exit 0
 } else {
   Write-Output "RUN id=$($run.id) conclusion=$($run.conclusion) url=$($run.html_url)"
   # --- 3. snapshot commit on cron day ---
-  $commits = Invoke-RestMethod -Uri "$base/commits?path=scripts/node-schedule.json&since=2026-10-03T07:00:00Z&until=2026-10-03T23:59:59Z&per_page=10" -Headers $h
+  $commits = Invoke-RestMethod -Uri "$base/commits?path=scripts/node-schedule.json&since=$($record.recordsOn)T07:00:00Z&until=$($record.recordsOn)T23:59:59Z&per_page=10" -Headers $h
   $commit = @($commits) | Select-Object -First 1
   # --- 4. matrix job step conclusions ---
   $jobs = Invoke-RestMethod -Uri "$base/actions/runs/$($run.id)/jobs?per_page=100" -Headers $h
@@ -85,13 +103,13 @@ if (-not $run) {
   $commitStep = @($mj.steps) | Where-Object { $_.name -like 'Commit the refreshed snapshot*' } | Select-Object -First 1
   # --- 5. snapshot state + live upstream compare (only when no commit) ---
   $sn = Invoke-RestMethod -Uri "$base/contents/scripts/node-schedule.json?ref=main" -Headers $h
-  $wrapper = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($sn.content)) | ConvertFrom-Json
+  $wrapper = ConvertFrom-VerdictJson ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($sn.content)))
   $age = [int](((Get-Date).ToUniversalTime() - [datetime]$wrapper._fetchedAt).TotalDays)
   $liveNote = 'not compared (commit found)'
   if (-not $commit) {
     try {
       $liveResp = Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/nodejs/Release/main/schedule.json' -UseBasicParsing
-      $live = $liveResp.Content | ConvertFrom-Json
+      $live = ConvertFrom-VerdictJson $liveResp.Content
       function Sig($s) { $rows = @(); foreach ($p in $s.PSObject.Properties) { if ($p.Name -notmatch '^v\d+$') { continue }; $e = $p.Value; $rows += ($p.Name + ':' + $e.start + ':' + $e.lts + ':' + $e.maintenance + ':' + $e.end) }; return (($rows | Sort-Object) -join '|') }
       # upstream schedule.json is FLAT - no .schedule wrapper
       if ((Sig $live) -eq (Sig $wrapper.schedule)) { $liveNote = 'live upstream REACHED and IDENTICAL to committed snapshot' } else { $liveNote = 'live upstream REACHED and DIFFERS from committed snapshot' }
@@ -145,22 +163,34 @@ if (-not $run) {
   Write-Output "STEPS refresh=$($refresh.conclusion) commit=$($commitStep.conclusion)"
   Write-Output "SNAPSHOT _fetchedAt=$($wrapper._fetchedAt) age=${age}d"
   Write-Output "LIVE $liveNote"
-  $comment = "post-Oct-3 verifier (run $($run.id), $today): **$verdict**`n`n- Scheduled run: $($run.conclusion) - $($run.html_url)`n- Snapshot commit on cron day: $commitLine`n- Steps: refresh=$($refresh.conclusion), commit=$($commitStep.conclusion)`n- Push status artifact: snapshot-push-$pushVerdict`n- Snapshot on main: _fetchedAt $($wrapper._fetchedAt) ($age days old)`n- Live upstream compare: $liveNote`n`nNext: $next"
-  Write-Output "VERDICT=$verdict"
+  $comment = "$(Format-VerdictHeader -Record $record -Run $run.id -Day $today): **$verdict**`n`n- Scheduled run: $($run.conclusion) - $($run.html_url)`n- Snapshot commit on cron day: $commitLine`n- Steps: refresh=$($refresh.conclusion), commit=$($commitStep.conclusion)`n- Push status artifact: snapshot-push-$pushVerdict`n- Snapshot on main: _fetchedAt $($wrapper._fetchedAt) ($age days old)`n- Live upstream compare: $liveNote`n`nNext: $next"
+  Write-Output "$($contract.logSyntax.verdict)$verdict"
 }
 if (-not $comment) { exit 0 }
 
 # --- 7. record on #18 (idempotent by run id marker) ---
-$prior = Invoke-RestMethod -Uri "$base/issues/18/comments?since=2026-10-03T00:00:00Z&per_page=50" -Headers $h
-$marker = if ($run) { "verifier run $($run.id)" } else { "verifier no-run $today" }
-if (@($prior) | Where-Object { $_.body -like "*$marker*" }) { Write-Output "ALREADY_RECORDED ($marker)"; exit 0 }
+# Print the composed body ALWAYS, not only on the dry path. The uploaded
+# oct3-verify-log artifact is the recovery source for scripts/recover-verdicts.mjs,
+# and a log that carries the exact comment cannot be mis-transcribed the way a
+# hand recovery can - the 2026-10-09 hand recovery of this very verdict read
+# `age=1d` from the artifact and wrote "0 days old" into #18.
+Write-Output $contract.logSyntax.body
+Write-Output $comment
+# The identity of THIS record, rendered from the contract's header - and the same
+# string searched for in the prior comments. The two sides have to be the same
+# text: this script used to search for 'verifier run <id>' while writing
+# 'post-Oct-3 verifier (run <id>, <day>)', so the guard could never fire and a
+# re-run posted a duplicate record for the same run.
+$header = Format-VerdictHeader -Record $record -Run $(if ($run) { $run.id } else { 'none' }) -Day $today
+$prior = Invoke-RestMethod -Uri "$base/issues/$issue/comments?since=$($record.readsSince)&per_page=50" -Headers $h
+if (@($prior) | Where-Object { $_.body -like "*$header*" }) { Write-Output "ALREADY_RECORDED ($header)"; exit 0 }
 if ($env:DRY_RUN -eq '1' -or $smoke) { Write-Output '--- DRY RUN: comment body below (not posted) ---'; Write-Output $comment; exit 0 }
 $cb = @{ body = $comment } | ConvertTo-Json
 try {
-  $r = Invoke-RestMethod -Uri "$base/issues/18/comments" -Method Post -Headers $h -ContentType 'application/json' -Body $cb
+  $r = Invoke-RestMethod -Uri "$base/issues/$issue/comments" -Method Post -Headers $h -ContentType 'application/json' -Body $cb
   Write-Output ("COMMENT_POSTED id=" + $r.id)
 } catch {
-  Write-Output ("COMMENT_FAILED " + $_.Exception.Message)
+  Write-Output ($contract.logSyntax.commentFailed + $_.Exception.Message)
   if ($_.ErrorDetails) { Write-Output $_.ErrorDetails.Message }
   if ($comment -match '[^\x00-\x7F]') { Write-Output 'HINT non-ASCII characters detected in body' }
 }

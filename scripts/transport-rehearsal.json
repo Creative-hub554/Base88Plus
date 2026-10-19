@@ -1,0 +1,156 @@
+{
+  "_about": [
+    "One world, asked the same questions through both transports - the PowerShell",
+    "stub (scripts/rehearse-sentinel-stub.ps1, which the cron tools really run",
+    "against) and the Node fetch shim (installFetchShim in scripts/rehearse-world.mjs,",
+    "which the Node tools really run against). The router between them is one",
+    "interpreter, so the property under rehearsal is the TRANSPORT: the same facts",
+    "must arrive at both callers, including the two shapes the real API produces and",
+    "the scripts' own wraps exist to survive - a one-element array (PowerShell",
+    "unrolls it to a single object, a tidy array would rehearse a kinder GitHub) and",
+    "none at all. Driven by scripts/rehearse-transports.mjs; see its header for why",
+    "an untested parity claim is the exact defect class this repo keeps meeting.",
+    "One case (artifact-zip) is not a comparison of two answers but of what each side",
+    "CAN do: an artifact is bytes, only the Node transport has a reader for it (the",
+    "recovery pass, whose own unzipEntry the driver uses), and the PowerShell transport",
+    "must REFUSE the bytes rather than answer an empty 200 - a successful download of",
+    "nothing is a rehearsal of the wrong thing. The case declares that, because agreeing",
+    "about a route one side cannot carry would be the kinder-GitHub mistake this file's",
+    "unrolling cases exist to avoid."
+  ],
+  "clock": "2026-10-04T12:00:00Z",
+  "issue": {
+    "number": 18,
+    "state": "open",
+    "closed_at": null,
+    "title": "Cron-day records"
+  },
+  "comments": [
+    {
+      "id": 6073315277,
+      "created_at": "2026-10-02T22:00:00Z",
+      "body": "recovered PASS, recorded the day before promotion day"
+    },
+    {
+      "id": 6073315280,
+      "created_at": "2026-10-03T00:00:00Z",
+      "body": "post-Oct-3 verifier (run 37123382655, 2026-10-03): **PASS_REFRESHED**"
+    }
+  ],
+  "workflows": [
+    {
+      "file": "oct3-verify.yml",
+      "name": "oct3-verify",
+      "path": ".github/workflows/oct3-verify.yml",
+      "state": "active",
+      "created_at": "2026-08-01T00:00:00Z"
+    }
+  ],
+  "runs": [
+    {
+      "id": 37123382655,
+      "workflow": "oct3-verify.yml",
+      "event": "schedule",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-03T07:17:00Z",
+      "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "id": 37183204922,
+      "workflow": "oct3-verify.yml",
+      "event": "schedule",
+      "status": "completed",
+      "conclusion": "failure",
+      "created_at": "2026-10-04T01:00:00Z",
+      "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ],
+  "artifacts": [
+    {
+      "id": 99000001000,
+      "run": 37123382655,
+      "log": "run.log",
+      "body": "run 37123382655 (2026-10-03, schedule)\nVERDICT=PASS_REFRESHED\nHEAD_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+    }
+  ],
+  "post": {
+    "deny": ["ghs_rehearsal_without_scope"]
+  },
+  "raw": {
+    "https://raw.githubusercontent.com/Creative-hub554/Base88Plus/main/scripts/node-schedule.json": "{\n  \"_fetchedAt\": \"2026-10-01\",\n  \"schedule\": {}\n}\n"
+  },
+  "next_comment_id": 9100000000,
+  "cases": [
+    {
+      "name": "issue-get",
+      "about": "An object response, the ordinary case.",
+      "method": "GET",
+      "uri": "https://api.github.com/repos/Creative-hub554/Base88Plus/issues/18"
+    },
+    {
+      "name": "comments-window-many",
+      "about": "An array with more than one element, oldest first, instants verbatim.",
+      "method": "GET",
+      "uri": "https://api.github.com/repos/Creative-hub554/Base88Plus/issues/18/comments?per_page=100&since=2026-10-02T00:00:00Z"
+    },
+    {
+      "name": "comments-window-one",
+      "about": "The unrolling hazard: one element, which PowerShell hands over as a single object with no .Count.",
+      "method": "GET",
+      "uri": "https://api.github.com/repos/Creative-hub554/Base88Plus/issues/18/comments?per_page=100&since=2026-10-03T00:00:00Z"
+    },
+    {
+      "name": "comments-window-none",
+      "about": "The other unrolling hazard: an empty array, which PowerShell hands over as $null.",
+      "method": "GET",
+      "uri": "https://api.github.com/repos/Creative-hub554/Base88Plus/issues/18/comments?per_page=100&since=2026-10-04T00:00:00Z"
+    },
+    {
+      "name": "workflow-runs",
+      "about": "A list nested inside an object, newest first.",
+      "method": "GET",
+      "uri": "https://api.github.com/repos/Creative-hub554/Base88Plus/actions/workflows/oct3-verify.yml/runs?event=schedule&per_page=100"
+    },
+    {
+      "name": "post-refused",
+      "about": "A write the world refuses for THIS token - the missing-scope 403, details and all.",
+      "method": "POST",
+      "uri": "https://api.github.com/repos/Creative-hub554/Base88Plus/issues/18/comments",
+      "token": "ghs_rehearsal_without_scope",
+      "body": "{\"body\":\"a record the workflow could not file\"}"
+    },
+    {
+      "name": "post-accepted",
+      "about": "A write the world accepts: the same request, a token that may.",
+      "method": "POST",
+      "uri": "https://api.github.com/repos/Creative-hub554/Base88Plus/issues/18/comments",
+      "token": "ghs_rehearsal_with_scope",
+      "body": "{\"body\":\"a record the workflow filed\"}"
+    },
+    {
+      "name": "unrouted",
+      "about": "A route the world does not describe: both transports must FAIL here, never reach the network.",
+      "method": "GET",
+      "uri": "https://api.github.com/repos/Creative-hub554/Base88Plus/actions/runs?per_page=100"
+    },
+    {
+      "name": "artifact-zip",
+      "about": "The recovery pass's download: BYTES. Node must hand back the world's log read out of the zip with the pass's own reader; PowerShell, which has no zip reader and no tool here that asks for one, must refuse with the reason the case names. An empty 200 would rehearse a download of nothing.",
+      "method": "GET",
+      "uri": "https://api.github.com/repos/Creative-hub554/Base88Plus/actions/artifacts/99000001000/zip",
+      "web": true,
+      "bytes": {
+        "entry": "run.log",
+        "powershellMust": "REHEARSAL_BINARY_UNSUPPORTED"
+      }
+    },
+    {
+      "name": "raw-file",
+      "about": "A raw.githubusercontent.com file, which the verifiers read with Invoke-WebRequest.",
+      "method": "GET",
+      "uri": "https://raw.githubusercontent.com/Creative-hub554/Base88Plus/main/scripts/node-schedule.json",
+      "web": true
+    }
+  ]
+}

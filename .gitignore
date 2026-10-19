@@ -8,6 +8,9 @@ next-env.d.ts
 projects-data/
 providers.json
 
+# Node runtimes downloaded by `npm run check:legs` — re-fetched on demand.
+.node-legs/
+
 # Freebuff session logs/state — keep only the notes file.
 .freebuff/*
 !.freebuff/run.md

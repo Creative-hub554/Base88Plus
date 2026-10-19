@@ -46,22 +46,34 @@ public class CredMan {
 $tok = if ($env:VERIFY_TOKEN) { $env:VERIFY_TOKEN } else { [CredMan]::Read('gh:github.com:Creative-hub554') }
 if (-not $tok) { Write-Output 'NO_TOKEN'; exit 1 }
 $h = @{ Authorization = "Bearer $tok"; Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' }
-$base = 'https://api.github.com/repos/Creative-hub554/Base88Plus'
+# --- 0. the contract (scripts/verdict-contract.json) ---
+# Nothing below restates the marker this script writes, the window it scans,
+# the day it records on or the header that names one of its records: the
+# recovery pass and the heartbeat auditor read the same declaration, and this
+# script's own dedupe renders its header from it rather than searching for a
+# string it never wrote.
+. (Join-Path $PSScriptRoot 'verdict-contract.ps1')
+$contract = Get-VerdictContract
+$record = Get-VerdictRecord -Contract $contract -ScriptPath $PSCommandPath
+$base = "https://api.github.com/repos/$($contract.repo)"
+$issue = $contract.issue
 
 # --- 1. date gate: promotion day is 2026-10-28 ---
 # VERIFY_GNOMON=yyyy-MM-dd fakes today for deterministic rehearsal of the
 # date-dependent branches (date gate, provenance alarm) without waiting.
 $today = if ($env:VERIFY_GNOMON) { $env:VERIFY_GNOMON } else { (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd') }
-# The date-gate overrides exist for plumbing rehearsals - a faked date can
-# produce a verdict that is FALSE on the real calendar, so posting must stay
-# impossible whenever either is set (guard added after an oct4-sentinel
-# gnomon rehearsal posted a false alarm onto #18 on 2026-09-30).
+# A faked calendar must not be able to file a record on GitHub; the transport, not
+# the date, decides whether it can (see Test-VerdictSimulatedTransport).
 if ($env:VERIFY_FORCE -eq '1' -or $env:VERIFY_GNOMON) {
-  $env:DRY_RUN = '1'
-  Write-Output 'FORCED_DRY_RUN (VERIFY_FORCE/VERIFY_GNOMON set - rehearsals never post)'
+  if (Test-VerdictSimulatedTransport) {
+    Write-Output 'SIMULATED_WORLD (faked date + rehearsal transport - a record filed here lands in the simulated world, never on GitHub)'
+  } else {
+    $env:DRY_RUN = '1'
+    Write-Output 'FORCED_DRY_RUN (VERIFY_FORCE/VERIFY_GNOMON set - rehearsals never post)'
+  }
 }
-if ($today -lt '2026-10-28' -and $env:VERIFY_FORCE -ne '1') {
-  Write-Output "REFUSED_DATE_GATE today=$today promotion day is 2026-10-28 (VERIFY_FORCE=1 overrides for plumbing tests)"; exit 2
+if ($today -lt $record.recordsOn -and $env:VERIFY_FORCE -ne '1') {
+  Write-Output "REFUSED_DATE_GATE today=$today promotion day is $($record.recordsOn) (VERIFY_FORCE=1 overrides for plumbing tests)"; exit 2
 }
 
 # --- 2. find the promotion-day dispatch run ---
@@ -78,8 +90,8 @@ if ($smoke) {
   if (-not $run -and @($runs.workflow_runs).Count -gt 0) { $run = $runs.workflow_runs | Sort-Object created_at -Descending | Select-Object -First 1 } # all cancelled: report the newest anyway
   if (-not $run) {
     $verdict = 'NO_DISPATCH_RUN'
-    $comment = "post-Oct-28 verifier ($today): **NO_DISPATCH_RUN**`n`nNo workflow_dispatch CI run exists on $today. Node 26 promoted to LTS today; the gates matrix only re-classifies on the next CI event. Fire one:`n`nPOST /repos/Creative-hub554/Base88Plus/actions/workflows/ci.yml/dispatches with body {`"ref`":`"main`"} (expect 204), then re-run this verifier.`n`n(NO_DISPATCH_RUN is exit 0 - firing the dispatch is a deliberate operator act, not a failure.)"
-    Write-Output "VERDICT=$verdict"
+    $comment = "$(Format-VerdictHeader -Record $record -Day $today): **NO_DISPATCH_RUN**`n`nNo workflow_dispatch CI run exists on $today. Node 26 promoted to LTS today; the gates matrix only re-classifies on the next CI event. Fire one:`n`nPOST /repos/$($contract.repo)/actions/workflows/ci.yml/dispatches with body {`"ref`":`"main`"} (expect 204), then re-run this verifier.`n`n(NO_DISPATCH_RUN is exit 0 - firing the dispatch is a deliberate operator act, not a failure.)"
+    Write-Output "$($contract.logSyntax.verdict)$verdict"
   }
 }
 if ($run) {
@@ -108,7 +120,7 @@ if ($run) {
   $checkLine = "gates (22)=$($gateState['gates (22)']), gates (24)=$($gateState['gates (24)']), gates (26)=$($gateState['gates (26)']), ci-ok=$ciokState, canary=$canaryState"
   # --- 4. snapshot age + Oct 3 cron provenance note ---
   $sn = Invoke-RestMethod -Uri "$base/contents/scripts/node-schedule.json?ref=main" -Headers $h
-  $wrapper = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($sn.content)) | ConvertFrom-Json
+  $wrapper = ConvertFrom-VerdictJson ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($sn.content)))
   $age = [int](((Get-Date).ToUniversalTime() - [datetime]$wrapper._fetchedAt).TotalDays)
   $cronNote = 'OK (refreshed by the Oct 3 cron push)'
   # Cast the LEFT side: ConvertFrom-Json yields _fetchedAt as a String, and a
@@ -117,7 +129,7 @@ if ($run) {
   # STALE PROVENANCE alarm could never fire. Rehearsed 2026-09-29.
   # Date-guarded: BEFORE Oct 3 the snapshot legitimately predates the cron,
   # so the alarm applies only on/after cron day ($today is ISO, string-safe).
-  if ($today -ge '2026-10-03' -and [datetime]$wrapper._fetchedAt -lt [datetime]'2026-10-03') {
+  if ($today -ge $record.provenanceSince -and [datetime]$wrapper._fetchedAt -lt [datetime]$record.provenanceSince) {
     $cronNote = 'STALE PROVENANCE - snapshot predates the Oct 3 cron; the Oct 3 refresh never landed (see the post-Oct-3 verifier / runbook step 3)'
   } elseif ($age -gt 25) {
     $cronNote = "WARNING - snapshot is $age days old (expected a refresh within ~a month of Oct 28)"
@@ -180,16 +192,26 @@ if ($run) {
   if ($verdict -like 'PASS*' -and $typesVerdict -eq 'READY_TO_MERGE') { $verdict = 'PASS_TYPES_READY' }
   if ($verdict -eq 'FAIL_NOT_PROMOTED' -and $expectCanary) { $verdict = 'PRE_PROMO_AS_EXPECTED' }
   if ($smoke) { $verdict = "SMOKE_$verdict" }
-  Write-Output "VERDICT=$verdict"
-  $comment = "post-Oct-28 verifier (run $($run.id), $today): **$verdict**`n`n- Dispatch run: $($run.conclusion) - $($run.html_url)`n- Check-runs: $checkLine`n- Snapshot on main: _fetchedAt $($wrapper._fetchedAt) ($age days old)`n- Push status artifact: snapshot-push-$pushVerdict`n- @types/node 26 PR: $prLine`n`nNext: $next"
+  Write-Output "$($contract.logSyntax.verdict)$verdict"
+  $comment = "$(Format-VerdictHeader -Record $record -Run $run.id -Day $today): **$verdict**`n`n- Dispatch run: $($run.conclusion) - $($run.html_url)`n- Check-runs: $checkLine`n- Snapshot on main: _fetchedAt $($wrapper._fetchedAt) ($age days old)`n- Push status artifact: snapshot-push-$pushVerdict`n- @types/node 26 PR: $prLine`n`nNext: $next"
 }
 
 if (-not $comment) { exit 0 }
 
 # --- 7. record on #18 (idempotent per run id) ---
-$marker = if ($run) { "verifier run $($run.id)" } else { "verifier no-run $today" }
-$prior = Invoke-RestMethod -Uri "$base/issues/18/comments?since=2026-10-28T00:00:00Z&per_page=50" -Headers $h
-if (@($prior) | Where-Object { $_.body -like "*$marker*" }) { Write-Output "ALREADY_RECORDED ($marker)"; exit 0 }
+# Print the composed body ALWAYS, not only on the dry path: the uploaded
+# oct28-verify-log artifact is the recovery source for
+# scripts/recover-verdicts.mjs, and a log carrying the exact comment cannot be
+# mis-transcribed the way a hand recovery can.
+Write-Output $contract.logSyntax.body
+Write-Output $comment
+# One record, one identity: the rendered header is what this script writes AND
+# what it searches for. They used to differ ('verifier run <id>' searched, '(run
+# <id>, <day>)' written), so ALREADY_RECORDED could never fire and a re-run of
+# this verifier posted a second record for the same run.
+$header = Format-VerdictHeader -Record $record -Run $(if ($run) { $run.id } else { 'none' }) -Day $today
+$prior = Invoke-RestMethod -Uri "$base/issues/$issue/comments?since=$($record.readsSince)&per_page=50" -Headers $h
+if (@($prior) | Where-Object { $_.body -like "*$header*" }) { Write-Output "ALREADY_RECORDED ($header)"; exit 0 }
 if ($env:DRY_RUN -eq '1' -or $smoke) {
   Write-Output '--- DRY RUN: comment body below (not posted, #18 not closed) ---'
   Write-Output $comment
@@ -199,10 +221,10 @@ if ($env:DRY_RUN -eq '1' -or $smoke) {
 # --- 8. post the promotion record ---
 $cb = @{ body = $comment } | ConvertTo-Json
 try {
-  $r = Invoke-RestMethod -Uri "$base/issues/18/comments" -Method Post -Headers $h -ContentType 'application/json' -Body $cb
+  $r = Invoke-RestMethod -Uri "$base/issues/$issue/comments" -Method Post -Headers $h -ContentType 'application/json' -Body $cb
   Write-Output ("COMMENT_POSTED id=" + $r.id)
 } catch {
-  Write-Output ("COMMENT_FAILED " + $_.Exception.Message)
+  Write-Output ($contract.logSyntax.commentFailed + $_.Exception.Message)
   if ($_.ErrorDetails) { Write-Output $_.ErrorDetails.Message }
   if ($comment -match '[^\x00-\x7F]') { Write-Output 'HINT non-ASCII characters detected in body' }
   exit 1
@@ -211,7 +233,7 @@ try {
 # --- 9. close #18 only on an explicit, passing, real run ---
 if ($env:CLOSE -eq '1' -and $verdict -like 'PASS*') {
   try {
-    Invoke-RestMethod -Uri "$base/issues/18" -Method Patch -Headers $h -ContentType 'application/json' -Body '{"state":"closed","state_reason":"completed"}'
+    Invoke-RestMethod -Uri "$base/issues/$issue" -Method Patch -Headers $h -ContentType 'application/json' -Body '{"state":"closed","state_reason":"completed"}'
     Write-Output 'ISSUE18_CLOSED (state=completed)'
   } catch {
     Write-Output ("CLOSE_FAILED " + $_.Exception.Message)

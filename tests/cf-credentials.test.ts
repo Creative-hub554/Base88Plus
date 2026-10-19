@@ -137,7 +137,11 @@ describe("listProviderModels — the one catalog-fetch contract", () => {
       { id: "groq", baseURL: "https://api.groq.com/openai/v1" } as never,
       settingsWith(undefined),
     );
-    expect(out).toEqual({ models: [], error: "No API key configured" });
+    expect(out).toEqual({
+      models: [],
+      metadata: {},
+      error: "No API key configured",
+    });
   });
 
   it("skips an un-expanded {account} URL without fetching", async () => {
@@ -151,6 +155,6 @@ describe("listProviderModels — the one catalog-fetch contract", () => {
       } as never,
       cfSettings,
     );
-    expect(out).toEqual({ models: [] });
+    expect(out).toEqual({ models: [], metadata: {} });
   });
 });

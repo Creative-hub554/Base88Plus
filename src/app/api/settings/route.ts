@@ -6,6 +6,7 @@ import {
   saveSettings,
 } from "@/lib/providers/gateway";
 import { DEFAULT_PROVIDERS } from "@/lib/providers/registry";
+import { clearModelCatalogCache } from "@/lib/models-catalog";
 
 export async function GET() {
   const settings = getSettings();
@@ -60,6 +61,13 @@ export async function POST(req: NextRequest) {
   }
 
   saveSettings(settings);
+
+  // A provider edit is the one write that changes what a catalog request
+  // would fetch (key, base URL, or the provider's very existence), so the
+  // cached catalogs — including a remembered failure — must go. Without
+  // this a key pasted a second ago could sit behind "unreachable" until the
+  // failure window lapsed, which reads exactly like the key was rejected.
+  if (body.provider) clearModelCatalogCache();
 
   // Return redacted settings.
   return Response.json({ settings: redactSettings(settings) });

@@ -4,6 +4,7 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { BuilderUIMessage, FileUpdate } from "@/lib/types";
+import type { ModelMetadata } from "@/lib/models-catalog";
 import { choose, notify, ToastHost } from "./toast";
 import { useInlineMetaEdit } from "./inline-meta-edit";
 import { FilePanel } from "./asset-uploader";
@@ -2415,7 +2416,165 @@ export interface ModelCatalogEntry {
   configured: boolean;
   defaultModel: string;
   models: string[];
+  /** Provider-published facts per model id; {} when it publishes none. */
+  metadata: Record<string, ModelMetadata>;
   error?: string;
+  /** The catalog is the last good one — the refresh failed (see error). */
+  stale?: boolean;
+}
+
+/**
+ * 1_048_576 → "1.05M", 131_072 → "131k", 8_192 → "8.2k", 512 → "512".
+ *
+ * Precision is not decoration here: rounding 1,048,576 to "1M" would print a
+ * number nobody published, and with hundreds of rows now arriving from two
+ * producers, the formatter is the one place the interface could lie about a
+ * value it was handed correctly.
+ */
+function formatTokens(tokens: number): string {
+  const trim = (n: number, digits: number) => String(Number(n.toFixed(digits)));
+  if (tokens >= 1_000_000) return `${trim(tokens / 1_000_000, 2)}M`;
+  if (tokens >= 100_000) return `${Math.round(tokens / 1_000)}k`;
+  if (tokens >= 1_000) return `${trim(tokens / 1_000, 1)}k`;
+  return String(tokens);
+}
+
+/**
+ * A model's provider-published facts as one line:
+ * "Anthropic: Claude Sonnet 4.6 · 1M ctx · max 128k out · $3/$15 per Mtok · tools · image".
+ *
+ * Returns null when the provider published nothing about this model, so
+ * callers render no line at all instead of an empty one — a missing fact is
+ * not the same as a zero, and the picker must never look like it knows more
+ * than the provider said. Nothing here is inferred from a model name: the
+ * name it prints is the provider's own label for the model, when it has one.
+ */
+export function describeModelMetadata(
+  metadata: ModelMetadata | undefined,
+): string | null {
+  if (!metadata) return null;
+  const parts: string[] = [];
+  if (metadata.name) parts.push(metadata.name);
+  if (metadata.contextLength) {
+    parts.push(`${formatTokens(metadata.contextLength)} ctx`);
+  }
+  // Context and output are different budgets: a model can hold a repository
+  // and still emit only a few thousand tokens in one answer.
+  if (metadata.maxCompletionTokens) {
+    parts.push(`max ${formatTokens(metadata.maxCompletionTokens)} out`);
+  }
+  // A one-sided price is still the provider's own number: the missing side
+  // is "?", not a copy of the side we have.
+  const priced =
+    metadata.pricePerMTokInput !== undefined ||
+    metadata.pricePerMTokOutput !== undefined;
+  if (priced) {
+    const money = (v: number | undefined) => (v === undefined ? "?" : String(v));
+    parts.push(
+      `$${money(metadata.pricePerMTokInput)}/$${money(
+        metadata.pricePerMTokOutput,
+      )} per Mtok`,
+    );
+  }
+  // Only asserted when the provider listed parameters at all: absent means
+  // "not published", which the type keeps distinct from "no tools".
+  if (metadata.supportsTools) parts.push("tools");
+  if (metadata.inputModalities?.length) {
+    parts.push(metadata.inputModalities.join("+"));
+  }
+  // Provenance comes last and only when the facts are NOT the model's own
+  // provider's: a curated third-party number must never read as the vendor's
+  // own, and a provider's own row needs no attribution to be believed.
+  if (metadata.source === "models.dev") parts.push("via models.dev");
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+/**
+ * The same facts cut down to what one `<option>` row can carry:
+ * "128k ctx · $0.59/$0.79" — plus "via models.dev" when the numbers are the
+ * dataset's rather than the vendor's.
+ *
+ * A native option's text *is* its accessible name, so unlike the line above
+ * this cannot be the whole paragraph: it carries the two numbers a choice
+ * actually turns on — how much the model can hold and what it costs — and the
+ * attribution, and leaves the provider's own label, the output budget, tools
+ * and modalities to the option's `title`, the full line one hover away. Any
+ * one of those facts is enough to produce a badge; a provider that published
+ * nothing still gets no badge at all, never a placeholder.
+ */
+export function describeModelBadge(
+  metadata: ModelMetadata | undefined,
+): string | null {
+  if (!metadata) return null;
+  const parts: string[] = [];
+  if (metadata.contextLength) {
+    parts.push(`${formatTokens(metadata.contextLength)} ctx`);
+  }
+  // A one-sided price is still the provider's own number: the missing side
+  // is "?", exactly as in the full line, never a copy of the side we have.
+  if (
+    metadata.pricePerMTokInput !== undefined ||
+    metadata.pricePerMTokOutput !== undefined
+  ) {
+    const money = (v: number | undefined) => (v === undefined ? "?" : String(v));
+    parts.push(
+      `$${money(metadata.pricePerMTokInput)}/$${money(
+        metadata.pricePerMTokOutput,
+      )}`,
+    );
+  }
+  if (metadata.source === "models.dev") parts.push("via models.dev");
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+/** How a model list can be ordered (the settings card's browser). */
+export type ModelSort = "default" | "price" | "context";
+
+/**
+ * A provider's models in the requested order. `default` is the catalogue's
+ * own (the ids, sorted by the provider or by us).
+ *
+ * Models the publisher said nothing about always come LAST, in both
+ * directions: an unpublished price is not a cheap one and an unpublished
+ * window is not a small one, so sorting must never let silence win a
+ * comparison. Ties keep the catalog's order, and models that publish only an
+ * output price sort by that rather than dropping out of the price order.
+ */
+export function sortModels(
+  models: string[],
+  metadata: Record<string, ModelMetadata> | undefined,
+  sort: ModelSort,
+): string[] {
+  if (sort === "default") return [...models];
+  const key = (model: string): number | undefined => {
+    const facts = metadata?.[model];
+    return sort === "price"
+      ? (facts?.pricePerMTokInput ?? facts?.pricePerMTokOutput)
+      : facts?.contextLength;
+  };
+  return models
+    .map((model, index) => ({ model, index, value: key(model) }))
+    .sort((a, b) => {
+      if (a.value === undefined || b.value === undefined) {
+        if (a.value === b.value) return a.index - b.index;
+        return a.value === undefined ? 1 : -1;
+      }
+      return sort === "price"
+        ? a.value - b.value
+        : b.value - a.value;
+    })
+    .map((entry) => entry.model);
+}
+
+/** The same line for a "providerId::modelId" selection, if it has facts. */
+function describeSelection(
+  entries: ModelCatalogEntry[],
+  selection: string,
+): string | null {
+  const [providerId, modelId] = selection.split("::");
+  if (!providerId || !modelId) return null;
+  const entry = entries.find((p) => p.id === providerId);
+  return describeModelMetadata(entry?.metadata?.[modelId]);
 }
 
 interface ProjectModelData {
@@ -2433,6 +2592,12 @@ interface ProjectModelData {
  * any, and — when `ensureSelection` is given — the current selection stays
  * selectable even if the provider doesn't list it (a pin to a model the
  * endpoint doesn't advertise must not silently vanish from the picker).
+ *
+ * What a provider published about a model rides along twice: a compact badge
+ * in the option's own text (context window and price — the two numbers a
+ * choice turns on, visible in the list and in the closed select, no hover
+ * needed) and the full line as the option's `title`. A `stale` catalog says so
+ * in its label instead of claiming to be the live list.
  */
 export function ModelOptgroups({
   entries,
@@ -2460,12 +2625,24 @@ export function ModelOptgroups({
               : [];
           if (extra.length === 0 && modelList.length === 0) return null;
           return (
-            <optgroup key={p.id} label={`${p.name}${p.error ? ` (${p.error})` : ""}`}>
-              {[...extra, ...modelList].map((m) => (
-                <option key={`${p.id}::${m}`} value={`${p.id}::${m}`}>
-                  {m}
-                </option>
-              ))}
+            <optgroup
+              key={p.id}
+              label={`${p.name}${
+                p.error ? ` (${p.stale ? "stale" : p.error})` : ""
+              }`}
+            >
+              {[...extra, ...modelList].map((m) => {
+                const badge = describeModelBadge(p.metadata?.[m]);
+                return (
+                  <option
+                    key={`${p.id}::${m}`}
+                    value={`${p.id}::${m}`}
+                    title={describeModelMetadata(p.metadata?.[m]) ?? undefined}
+                  >
+                    {badge ? `${m} — ${badge}` : m}
+                  </option>
+                );
+              })}
             </optgroup>
           );
         })}
@@ -2542,6 +2719,11 @@ export function ProjectModelPicker({
 
   const pinned = selection !== "global";
 
+  // What the provider published about whichever model this picker is on —
+  // null for the "global default" option and for providers that publish
+  // nothing, which are the same thing as far as this line is concerned.
+  const facts = describeSelection(data?.catalog ?? [], selection);
+
   return (
     <div className="flex items-center gap-2">
       <select
@@ -2577,6 +2759,7 @@ export function ProjectModelPicker({
           pinned
         </span>
       )}
+      {facts && <span className="text-[10px] text-neutral-500">{facts}</span>}
       {saving && <span className="text-[10px] text-neutral-500">saving…</span>}
       {savedTick && <span className="text-[10px] text-emerald-400">saved ✓</span>}
     </div>
@@ -2662,6 +2845,9 @@ export function ModelPicker({ refreshKey }: { refreshKey: number }) {
 
   const usable = (catalog?.providers ?? []).filter(isUsable);
   const disabled = usable.length === 0;
+  // Null when the provider published nothing about the selected model, so
+  // the header grows no empty element to explain.
+  const facts = describeSelection(usable, selection);
 
   return (
     <div className="flex items-center gap-2">
@@ -2681,6 +2867,7 @@ export function ModelPicker({ refreshKey }: { refreshKey: number }) {
           ensureSelection={selection}
         />
       </select>
+      {facts && <span className="text-[10px] text-neutral-500">{facts}</span>}
       {saving && <span className="text-[10px] text-neutral-500">saving…</span>}
       {savedTick && <span className="text-[10px] text-emerald-400">saved ✓</span>}
     </div>
@@ -2824,6 +3011,103 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
 /** Key for the active-pair save in the savingIds set. */
 const ACTIVE_KEY = "__active__";
 
+/**
+ * The settings card's model browser: the provider's own catalogue, with
+ * whatever was published about each model, ordered by catalogue, price or
+ * context window. Clicking a model only sets the card's model field — the
+ * card's existing diff-save posts it — so this control cannot save anything
+ * on its own.
+ *
+ * Renders nothing without a catalogue. The free-text field above is the whole
+ * interface for a provider that is unconfigured, unreachable or simply not
+ * listed yet, and a disclosure that opens onto nothing is worse than none.
+ */
+function ProviderModelBrowser({
+  entry,
+  providerName,
+  current,
+  onPick,
+}: {
+  entry: ModelCatalogEntry | undefined;
+  providerName: string;
+  /** The card's current model field value, if any. */
+  current: string;
+  onPick: (model: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [sort, setSort] = useState<ModelSort>("default");
+
+  if (!entry) return null;
+  const facts = describeModelMetadata(entry.metadata?.[current]);
+  const rows = sortModels(entry.models ?? [], entry.metadata, sort);
+
+  return (
+    <div className="mt-2">
+      {facts && (
+        <p className="text-[10px] text-neutral-500" title="Published facts for the current model">
+          {facts}
+        </p>
+      )}
+      {rows.length > 0 && (
+        <>
+          <div className="mt-1 flex items-center gap-2">
+            <button
+              type="button"
+              aria-expanded={open}
+              aria-label={`Browse models for ${providerName}`}
+              onClick={() => setOpen(!open)}
+              className="rounded-md border border-neutral-800 px-2 py-0.5 text-[10px] text-neutral-400 hover:border-neutral-600 hover:text-neutral-200"
+            >
+              {open ? "Hide" : "Browse"} {rows.length} model
+              {rows.length === 1 ? "" : "s"}
+            </button>
+            {open && (
+              <select
+                aria-label={`Sort models for ${providerName}`}
+                value={sort}
+                onChange={(e) => setSort(e.target.value as ModelSort)}
+                className="rounded-md border border-neutral-800 bg-neutral-900 px-1.5 py-0.5 text-[10px] text-neutral-300 outline-none focus:border-neutral-600"
+              >
+                <option value="default">Catalogue order</option>
+                <option value="price">Cheapest first</option>
+                <option value="context">Largest context first</option>
+              </select>
+            )}
+          </div>
+          {open && (
+            <ul className="mt-1 max-h-56 overflow-y-auto rounded-lg border border-neutral-800">
+              {rows.map((model) => {
+                const described = describeModelMetadata(entry.metadata?.[model]);
+                return (
+                  <li key={model} className="border-b border-neutral-900 last:border-b-0">
+                    <button
+                      type="button"
+                      onClick={() => onPick(model)}
+                      aria-current={model === current ? "true" : undefined}
+                      className={`flex w-full flex-col items-start gap-0.5 px-2.5 py-1.5 text-left hover:bg-neutral-900 ${
+                        model === current ? "bg-indigo-950/30" : ""
+                      }`}
+                    >
+                      <span className="font-mono text-[11px] text-neutral-200">
+                        {model}
+                      </span>
+                      {described && (
+                        <span className="text-[10px] text-neutral-500">
+                          {described}
+                        </span>
+                      )}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function SettingsForm({
   onDone,
   embedded,
@@ -2861,6 +3145,16 @@ function SettingsForm({
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
   /** One-tick confirmation for the active-pair save. */
   const [savedActive, setSavedActive] = useState(false);
+  /**
+   * The live catalogue per provider, from /api/models — the same read the
+   * pickers make (and cached server-side), carrying each model's published
+   * facts. Empty until it arrives, and empty for good if it never does: the
+   * free-text model field is all this card ever required, so a missing
+   * catalogue takes away a convenience and nothing else.
+   */
+  const [catalog, setCatalog] = useState<Record<string, ModelCatalogEntry>>(
+    {},
+  );
 
   useEffect(() => {
     fetch("/api/settings")
@@ -2889,6 +3183,22 @@ function SettingsForm({
         setLoadedActiveId(d.settings.activeProviderId);
         setLoadedActiveModel(d.settings.activeModel ?? "");
       });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/models")
+      .then((r) => r.json())
+      .then((d: { providers?: ModelCatalogEntry[] }) => {
+        if (cancelled) return;
+        const byId: Record<string, ModelCatalogEntry> = {};
+        for (const entry of d?.providers ?? []) byId[entry.id] = entry;
+        setCatalog(byId);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   /**
@@ -3118,6 +3428,12 @@ function SettingsForm({
                 className="rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 text-xs outline-none focus:border-neutral-600 sm:col-span-2"
               />
             </div>
+            <ProviderModelBrowser
+              entry={catalog[p.id]}
+              providerName={p.name}
+              current={models[p.id] ?? ""}
+              onPick={(model) => setModels({ ...models, [p.id]: model })}
+            />
             <div className="mt-3 flex items-center justify-end gap-2">
               {savingIds.has(p.id) ? (
                 <span className="text-xs text-neutral-500">Saving…</span>

@@ -174,8 +174,11 @@ describe("models route — catalog flags equal the gates", () => {
     for (const entry of providers) {
       const p = realProvider(settings, entry.id);
       expect(entry.configured).toBe(hasProviderCredentials(p, settings));
-      const { models, error } = await listProviderModels(p, settings);
+      const { models, metadata, error } = await listProviderModels(p, settings);
       expect(entry.models).toEqual(models);
+      // The picker renders these facts verbatim (option titles + the
+      // selection line), so they are part of the consumed contract too.
+      expect(entry.metadata).toEqual(metadata);
       expect(entry.error).toBe(error);
     }
     // Placeholder OpenAI key: no drift anywhere in the catalog response.
@@ -217,8 +220,11 @@ describe("pin-model route — catalog + default equal the gates", () => {
     for (const entry of data.catalog) {
       const p = realProvider(settings, entry.id);
       expect(entry.configured).toBe(hasProviderCredentials(p, settings));
-      const { models, error } = await listProviderModels(p, settings);
+      const { models, metadata, error } = await listProviderModels(p, settings);
       expect(entry.models).toEqual(models);
+      // The picker renders these facts verbatim (option titles + the
+      // selection line), so they are part of the consumed contract too.
+      expect(entry.metadata).toEqual(metadata);
       expect(entry.error).toBe(error);
     }
   });
@@ -301,6 +307,66 @@ describe("health route — dashboard flags equal the gates", () => {
     );
     expect(pinned.source).toBe("project");
     expect(pinned.pinBroken).toBe(true);
+  });
+});
+
+describe("the catalog cache — a provider write must not be masked by it", () => {
+  const GROQ = "https://api.groq.com/openai/v1";
+
+  /** Requests the route actually sent to one provider's /models endpoint. */
+  const callsTo = (baseURL: string) =>
+    vi
+      .mocked(globalThis.fetch)
+      .mock.calls.filter(([url]) => String(url) === `${baseURL}/models`).length;
+
+  it("refetches after a provider edit, and serves the cache without one", async () => {
+    // This file mocks fetch to reject (see the top); this test needs a
+    // catalog to cache, so it serves one and restores the rejection after.
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockImplementation(async () =>
+      new Response(JSON.stringify({ data: [{ id: "llama-3.3-70b-versatile" }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const post = (body: unknown) =>
+      POST(
+        new Request("http://localhost/x", {
+          method: "POST",
+          body: JSON.stringify(body),
+        }) as never,
+      );
+
+    const { GET } = await import("../src/app/api/models/route");
+    const { POST } = await import("../src/app/api/settings/route");
+
+    try {
+      // The fresh window: a second open is served without a request.
+      await (await GET()).json();
+      expect(callsTo(GROQ)).toBe(1);
+      await (await GET()).json();
+      expect(callsTo(GROQ)).toBe(1);
+
+      // A settings write that only moves the active model is not a provider
+      // edit: the cached catalogs still describe the endpoints on disk.
+      await post({ activeModel: "llama-3.3-70b-versatile" });
+      await (await GET()).json();
+      expect(callsTo(GROQ)).toBe(1);
+
+      // A provider write is one: the key it changes is exactly what the
+      // cached catalog was fetched with, so serving it on would look like
+      // the new key had been tried and produced the old answer.
+      await post({
+        provider: { id: "groq", apiKey: "gsk_real_key_CHANGED_0123456789ab" },
+      });
+      await (await GET()).json();
+      expect(callsTo(GROQ)).toBe(2);
+    } finally {
+      fetchMock.mockImplementation(() =>
+        Promise.reject(new Error("no network in api-ui-contract tests")),
+      );
+    }
   });
 });
 

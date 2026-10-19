@@ -15,6 +15,13 @@
  *
  * The fetch stub is stateful and merges POSTs exactly like the real
  * settings route (partial merge, key flips `configured`, keys redacted).
+ *
+ * The model browser added under each card is pinned too: it is fed by
+ * /api/models (the pickers' own read), it shows each model's PUBLISHED facts
+ * with their attribution, it orders them by price or context window with
+ * models nobody published a number for always last — and picking one only
+ * fills the card's model field, so the card's own diff-save is still the
+ * only thing that writes. Without a catalogue there is no browser at all.
  */
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -51,15 +58,24 @@ function freshCommittedSettings() {
 }
 
 let committed: ReturnType<typeof freshCommittedSettings>;
+/** What GET /api/models answers — the settings page reads it for the browser. */
+let catalog: { providers: unknown[] };
 
 beforeEach(() => {
   calls = [];
   committed = freshCommittedSettings();
+  catalog = { providers: [] };
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      if (url.endsWith("/api/models")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(catalog),
+        } as Response);
+      }
       if (url.endsWith("/api/settings") && !init?.method) {
         return Promise.resolve({
           ok: true,
@@ -107,20 +123,33 @@ function cardOf(name: string): HTMLElement {
   return label.closest("div.rounded-xl") as HTMLElement;
 }
 
+/**
+ * `delay: null` is load-bearing. user-event's default `delay: 0` is not "no
+ * delay": it awaits a real `setTimeout(resolve, 0)` between EVERY keystroke
+ * (user-event/dist/cjs/utils/misc/wait.js — the `typeof delay !== 'number'`
+ * branch is the only way to skip it). A 30-character key plus a click costs
+ * ~35 event-loop round trips whose wall time is pure scheduler contention, so
+ * under 2x CPU oversubscription two tests in this file measured 3.6s and 3.8s
+ * against vitest's 5s budget, and the suite has already reported them as
+ * timeouts. Interactions still fire as real per-key input events; only the
+ * timer hop is gone, and no assertion changes.
+ */
 async function renderForm() {
+  const user = userEvent.setup({ delay: null });
   render(<SettingsForm onDone={() => {}} />);
   await screen.findByLabelText(`API key for Ollama (local)`);
+  return user;
 }
 
 describe("SettingsForm — per-card saves", () => {
   it("shows a Save button per card only while that card is dirty", async () => {
-    await renderForm();
+    const user = await renderForm();
 
     // No save buttons, no unsaved badges when everything is committed.
     expect(screen.queryByRole("button", { name: /Save/ })).toBeNull();
     expect(screen.queryByText(/unsaved/i)).toBeNull();
 
-    await userEvent.type(
+    await user.type(
       screen.getByLabelText("API key for Groq"),
       "gsk_real_key_0123456789abcdef",
     );
@@ -137,15 +166,15 @@ describe("SettingsForm — per-card saves", () => {
   });
 
   it("saving one card does not post or clear another card's edits", async () => {
-    await renderForm();
+    const user = await renderForm();
 
-    await userEvent.type(screen.getByLabelText("API key for Groq"), "gsk_real_key_0123456789abcdef");
-    await userEvent.type(
+    await user.type(screen.getByLabelText("API key for Groq"), "gsk_real_key_0123456789abcdef");
+    await user.type(
       screen.getByLabelText(/Default model for Ollama/),
       "-edit",
     );
 
-    await userEvent.click(screen.getByRole("button", { name: "Save Groq" }));
+    await user.click(screen.getByRole("button", { name: "Save Groq" }));
     await waitFor(() => expect(within(cardOf("Groq")).getByText("Saved ✓")).toBeTruthy());
 
     const { providerPosts } = summarize();
@@ -159,13 +188,13 @@ describe("SettingsForm — per-card saves", () => {
   });
 
   it("posts a diff-only payload and flips the configured badge after a key save", async () => {
-    await renderForm();
+    const user = await renderForm();
 
-    await userEvent.type(
+    await user.type(
       screen.getByLabelText("API key for Groq"),
       "gsk_real_key_0123456789abcdef",
     );
-    await userEvent.click(screen.getByRole("button", { name: "Save Groq" }));
+    await user.click(screen.getByRole("button", { name: "Save Groq" }));
     await waitFor(() => expect(within(cardOf("Groq")).getByText("Saved ✓")).toBeTruthy());
 
     const body = calls.find((c) => c.body?.provider)?.body
@@ -179,17 +208,17 @@ describe("SettingsForm — per-card saves", () => {
   });
 
   it("model and base-URL saves post their diffs without a refresh", async () => {
-    await renderForm();
+    const user = await renderForm();
 
-    await userEvent.type(
+    await user.type(
       screen.getByLabelText(/Default model for Ollama/),
       "-edit",
     );
-    await userEvent.type(
+    await user.type(
       screen.getByLabelText(`Base URL for Groq`),
       "-edited",
     );
-    await userEvent.click(screen.getByRole("button", { name: "Save Ollama (local)" }));
+    await user.click(screen.getByRole("button", { name: "Save Ollama (local)" }));
     await waitFor(() => expect(within(cardOf("Ollama (local)")).getByText("Saved ✓")).toBeTruthy());
 
     const { providerPosts } = summarize();
@@ -209,9 +238,9 @@ describe("SettingsForm — per-card saves", () => {
   });
 
   it("switching the active provider commits immediately and clears the model", async () => {
-    await renderForm();
+    const user = await renderForm();
 
-    await userEvent.click(screen.getByLabelText("Use Groq"));
+    await user.click(screen.getByLabelText("Use Groq"));
 
     await waitFor(() => {
       const { providerPosts, activePosts } = summarize();
@@ -225,14 +254,174 @@ describe("SettingsForm — per-card saves", () => {
   });
 
   it("shows the active-pair Saved ✓ confirmation and header count clears", async () => {
-    await renderForm();
+    const user = await renderForm();
 
-    await userEvent.click(screen.getByLabelText("Use Groq"));
+    await user.click(screen.getByLabelText("Use Groq"));
     await screen.findByText("Saved ✓");
 
     // After commit: no dirty count, radio state consistent.
     expect(screen.queryByText(/unsaved/i)).toBeNull();
     expect((screen.getByLabelText("Use Groq") as HTMLInputElement).checked).toBe(true);
     expect((screen.getByLabelText("Use Ollama (local)") as HTMLInputElement).checked).toBe(false);
+  });
+});
+
+/**
+ * A catalogue with four shapes: the card's current model (a dataset row, so
+ * attribution is exercised), one cheap narrow model, one expensive wide one,
+ * and one nobody published a number for.
+ */
+function catalogFixture() {
+  return {
+    providers: [
+      {
+        id: "ollama",
+        name: "Ollama (local)",
+        configured: true,
+        defaultModel: "qwen2.5-coder:1.5b",
+        models: [
+          "qwen2.5-coder:1.5b",
+          "mystery-model",
+          "small-cheap",
+          "wide-expensive",
+        ],
+        metadata: {
+          "qwen2.5-coder:1.5b": {
+            source: "models.dev",
+            name: "Qwen2.5 Coder 1.5B",
+            contextLength: 32_768,
+            maxCompletionTokens: 16_384,
+            pricePerMTokInput: 0.09,
+            pricePerMTokOutput: 0.29,
+            supportsTools: true,
+          },
+          "small-cheap": {
+            source: "provider",
+            contextLength: 8_192,
+            pricePerMTokInput: 0.05,
+          },
+          "wide-expensive": {
+            source: "provider",
+            contextLength: 1_048_576,
+            pricePerMTokInput: 3,
+          },
+        },
+      },
+    ],
+  };
+}
+
+describe("SettingsForm — the model browser", () => {
+  const card = () => cardOf("Ollama (local)");
+  const sortControl = () => within(card()).getByLabelText("Sort models for Ollama (local)");
+  /** The ids in rendered order — the row's own span, not its facts line. */
+  const order = () =>
+    within(card())
+      .getAllByRole("listitem")
+      .map((li) => li.querySelector("span")?.textContent ?? "");
+
+  async function expanded() {
+    const user = await renderForm();
+    await user.click(
+      within(card()).getByRole("button", {
+        name: "Browse models for Ollama (local)",
+      }),
+    );
+    return user;
+  }
+
+  it("shows the current model's published facts before anything is expanded", async () => {
+    catalog = catalogFixture();
+    await renderForm();
+
+    const facts = await within(card()).findByText(/32.8k ctx/);
+    expect(facts.textContent).toContain("Qwen2.5 Coder 1.5B");
+    expect(facts.textContent).toContain("max 16.4k out");
+    expect(facts.textContent).toContain("$0.09/$0.29 per Mtok");
+    // Attribution travels into settings as well: this row is not the vendor's.
+    expect(facts.textContent).toContain("via models.dev");
+    expect(within(card()).queryAllByRole("listitem")).toHaveLength(0);
+  });
+
+  it("lists every model with its facts, and a click only fills the card's field", async () => {
+    catalog = catalogFixture();
+    const user = await expanded();
+
+    expect(order()).toEqual([
+      "qwen2.5-coder:1.5b",
+      "mystery-model",
+      "small-cheap",
+      "wide-expensive",
+    ]);
+    // Every model is listed; the one nobody published a number for simply has
+    // no facts line, rather than a line of zeros.
+    const rows = within(card()).getAllByRole("listitem").map((li) => li.textContent ?? "");
+    expect(rows[2]).toContain("8.2k ctx");
+    expect(rows[3]).toContain("1.05M ctx");
+    expect(rows[1]).not.toContain("ctx");
+
+    // Picking writes NOTHING: it fills the field, and the card's own
+    // diff-save remains the only thing that posts (the contract above).
+    await user.click(within(card()).getByText("wide-expensive"));
+    expect(
+      (screen.getByLabelText(/Default model for Ollama/) as HTMLInputElement)
+        .value,
+    ).toBe("wide-expensive");
+    expect(within(card()).getByText("unsaved")).toBeTruthy();
+    expect(calls.filter((c) => c.body?.provider)).toEqual([]);
+
+    await user.click(screen.getByRole("button", { name: "Save Ollama (local)" }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.body?.provider)?.body?.provider).toEqual({
+        id: "ollama",
+        defaultModel: "wide-expensive",
+      }),
+    );
+  });
+
+  it("orders by price or context window, and an unpublished number never wins", async () => {
+    catalog = catalogFixture();
+    const user = await expanded();
+
+    await user.selectOptions(sortControl(), "price");
+    expect(order()).toEqual([
+      "small-cheap",
+      "qwen2.5-coder:1.5b",
+      "wide-expensive",
+      // Last in BOTH directions: silence is not cheap and not small.
+      "mystery-model",
+    ]);
+
+    await user.selectOptions(sortControl(), "context");
+    expect(order()).toEqual([
+      "wide-expensive",
+      "qwen2.5-coder:1.5b",
+      "small-cheap",
+      "mystery-model",
+    ]);
+
+    await user.selectOptions(sortControl(), "default");
+    expect(order()[0]).toBe("qwen2.5-coder:1.5b");
+    expect(order()[3]).toBe("wide-expensive");
+  });
+
+  it("offers nothing to browse when there is no catalogue", async () => {
+    // The shipped default: every provider listed no models.
+    await renderForm();
+    expect(
+      within(card()).queryByRole("button", { name: /Browse/ }),
+    ).toBeNull();
+    expect(
+      within(cardOf("Groq")).queryByRole("button", { name: /Browse/ }),
+    ).toBeNull();
+  });
+
+  it("survives a catalogue response with no providers in it", async () => {
+    catalog = {} as never;
+    await renderForm();
+    // The model field is all this card ever required; a shapeless payload
+    // must cost a convenience, not the page.
+    expect(screen.getByLabelText(/Default model for Ollama/)).toBeTruthy();
+    expect(within(card()).queryByRole("button", { name: /Browse/ })).toBeNull();
   });
 });

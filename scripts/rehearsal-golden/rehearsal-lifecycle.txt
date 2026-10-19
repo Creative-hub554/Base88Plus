@@ -1,0 +1,14 @@
+LIFECYCLE fixture=rehearsal-lifecycle.json steps=8
+LIFECYCLE OK   computed: the verifier derives the verdict and cannot file it
+LIFECYCLE OK   filed: the workflow uploads the run log the record lives in
+LIFECYCLE OK   lost: the day-after sentinel trips on the missing receipt
+LIFECYCLE OK   lost: the auditor says the run owed a record and never recorded it
+LIFECYCLE OK   recovered: the pass re-posts the record from the artifact
+LIFECYCLE OK   recovered: a second pass finds nothing left to recover
+LIFECYCLE OK   retired: the auditor grades the trip stale and the receipt landed
+LIFECYCLE OK   retired: the sentinel stands down
+LIFECYCLE trail (#18, 3 comment(s)):
+  9000000000  2026-10-04T01:00:12Z  post-Oct-3 sentinel (checked 2026-10-04): **SENTINEL_RUN_NO_PASS**
+  9000000001  2026-10-04T12:00:00Z  Weekly schedule heartbeat (2026-10-04): **2 finding(s)** - a schedule looks dead or disabled.
+  9000000002  2026-10-04T12:15:00Z  post-Oct-3 verifier (run 37123382655, 2026-10-03): **PASS_REFRESHED**
+LIFECYCLE_DONE steps=8 failed=0 recovered=1

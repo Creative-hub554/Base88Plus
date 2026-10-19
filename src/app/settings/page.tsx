@@ -1,6 +1,7 @@
 "use client";
 
 import { SettingsForm } from "@/components/builder-client";
+import { ReloadHistorySection } from "@/components/reload-history-section";
 
 export default function SettingsPage() {
   return (
@@ -17,6 +18,7 @@ export default function SettingsPage() {
         </a>
       </div>
       <SettingsForm onDone={() => history.back()} />
+      <ReloadHistorySection />
     </main>
   );
 }

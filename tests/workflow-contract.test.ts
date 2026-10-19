@@ -7,7 +7,7 @@
 // and invisible to every check. A green run that is not a verdict, the same
 // class as the lost Oct 3 verdict in #129.
 //
-// The three checks, and the real failure each one exists for:
+// The five checks, and the real failure each one exists for:
 //   1. PARSE — the glued comments (MISSING_CHAR), plus duplicate keys, which
 //      a lenient parser resolves by silently keeping the last value.
 //   2. CRON  — GitHub IGNORES a cron it cannot parse: no run, no error, no
@@ -15,6 +15,15 @@
 //   3. PERMS — a workflow posting an issue comment without issues: write gets
 //      403 "Resource not accessible by integration" and still exits 0. That
 //      is the Oct 3 verdict, lost.
+//   4. WRITE — a workflow that REGENERATES a committed record instead of
+//      checking it: the rehearsal baseline (`--write-golden`) or the generated
+//      pins (`new:pin`). A runner's checkout is discarded, so a job that rewrote
+//      a record and then checked it reports PASS about a file nobody has, and a
+//      job that committed it would be re-making the pin with the very run it
+//      judges — `verify:generated --strict` reading a pin this run wrote.
+//   5. REFRESH — the one pin CI DOES rewrite, the upstream schedule snapshot,
+//      may only be refreshed where the result can be committed: unguarded it
+//      also runs on push and PR, where the file is thrown away.
 //
 // Each negative case below is a FIXTURE, not a mutation of the real tree: the
 // gate must be proven to have teeth without ever writing an invalid workflow
@@ -27,7 +36,10 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   DEFAULT_DIR,
+  PIN_WRITERS,
+  REFRESHABLE_PIN,
   assessPermissions,
+  assessPinWrites,
   checkAll,
   checkWorkflow,
   collectCrons,
@@ -284,6 +296,115 @@ describe('collectCrons', () => {
   });
 });
 
+describe('assessPinWrites: CI checks a record, it never regenerates one', () => {
+  /** A workflow whose only step is the parity check, with the args under test. */
+  const parity = (args: string) =>
+    workflow({
+      jobs:
+        'jobs:\n  compare:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm run check:rehearsal-parity' +
+        ` -- --dir engines ${args}\n`,
+    });
+
+  /** A workflow whose step runs `command`, under `if`, in a job with `contents`. */
+  const runner = (command: string, guard?: string, contents = 'read') =>
+    workflow({
+      permissions: `permissions:\n  contents: ${contents}\n  issues: write\n`,
+      jobs:
+        `jobs:\n  refresh:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: ${contents}\n    steps:\n` +
+        `      - run: ${command}\n${guard ? `        if: ${guard}\n` : ''}`,
+    });
+
+  it('passes the steps CI actually runs', () => {
+    expect(assessPinWrites(tree(parity('')))).toEqual([]);
+    // The snapshot refresh, gated to the runs that can commit it.
+    expect(
+      assessPinWrites(
+        tree(runner('npm run update:schedule', "github.event_name == 'schedule'", 'write')),
+      ),
+    ).toEqual([]);
+  });
+
+  it('fails a step that regenerates the baseline, naming the job and the step', () => {
+    const problems = assessPinWrites(tree(parity('--write-golden')));
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatchObject({ check: 'write', where: 'jobs.compare.steps[0]' });
+    expect(problems[0].message).toContain('never');
+    // Through the gate as well, so the helper being right is not the whole claim:
+    // a finding nobody collects is a finding nobody sees.
+    expect(checkWorkflow('x.yml', parity('--write-golden')).map((p) => p.check)).toContain('write');
+  });
+
+  it('fails a step that generates a pin, which is the same self-approval', () => {
+    // `verify:generated --strict` reads tests/generated/, so a CI step that made a
+    // pin would be writing the evidence it then passes on.
+    for (const command of ['npm run new:pin -- projects-data/x', 'node scripts/new-generated-pin.mjs']) {
+      const problems = assessPinWrites(tree(runner(command)));
+      expect(problems, command).toHaveLength(1);
+      expect(problems[0]).toMatchObject({ check: 'write', where: 'jobs.refresh.steps[0]' });
+      expect(problems[0].message, command).toContain('tests/generated/');
+    }
+  });
+
+  it('reads the parsed tree, so a comment naming either is not a finding', () => {
+    // A comment is how a workflow explains itself. Only a step can run something.
+    const explained =
+      '# never run --write-golden or new:pin here: the pins are the point\n' + parity('');
+    expect(checkWorkflow('x.yml', explained)).toEqual([]);
+  });
+
+  it('is inert on a document with no tree', () => {
+    expect(assessPinWrites(null)).toEqual([]);
+    expect(assessPinWrites('not an object')).toEqual([]);
+  });
+
+  it('allows the snapshot refresh only where it can be committed', () => {
+    // The exception is declared, not assumed: the mirror is refreshed, the
+    // result has to land somewhere. Unguarded it also runs on push and PR (where
+    // a push would additionally be self-triggering).
+    const unguarded = assessPinWrites(tree(runner('npm run update:schedule', undefined, 'write')));
+    expect(unguarded).toHaveLength(1);
+    expect(unguarded[0]).toMatchObject({ check: 'refresh', where: 'jobs.refresh.steps[0]' });
+    expect(unguarded[0].message).toContain('no trigger guard');
+
+    const onPush = assessPinWrites(tree(runner('npm run update:schedule', "github.event_name == 'push'", 'write')));
+    expect(onPush.map((p) => p.check)).toEqual(['refresh']);
+
+    // A guard is not enough on its own: a job that cannot push the refresh makes
+    // it a rewrite of a file the runner discards.
+    const readOnly = assessPinWrites(
+      tree(runner('npm run update:schedule', "github.event_name == 'schedule'", 'read')),
+    );
+    expect(readOnly).toHaveLength(1);
+    expect(readOnly[0].message).toContain('contents: write');
+
+    // A dispatch on main is the other declared trigger.
+    expect(
+      assessPinWrites(
+        tree(
+          runner(
+            'npm run update:schedule',
+            "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'",
+            'write',
+          ),
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  it('pins the policy itself rather than merely its absence', () => {
+    // A new pattern or a new exception has to be a deliberate edit here.
+    expect(PIN_WRITERS.map((entry) => entry.patterns)).toEqual([
+      ['--write-golden'],
+      ['new:pin', 'new-generated-pin'],
+    ]);
+    expect(REFRESHABLE_PIN).toMatchObject({
+      patterns: ['update:schedule'],
+      triggers: ['schedule', 'workflow_dispatch'],
+    });
+    expect(PIN_WRITERS.map((entry) => entry.pin).join()).toContain('scripts/rehearsal-golden/');
+  });
+});
+
 describe('the real tree: this gate is green TODAY, for a reason', () => {
   it('holds for every workflow in .github/workflows', () => {
     const result = checkAll();
@@ -327,6 +448,32 @@ describe('the real tree: this gate is green TODAY, for a reason', () => {
       const js = tree(fs.readFileSync(path.join(DEFAULT_DIR, file), 'utf8'));
       expect(Object.keys(js.on.workflow_dispatch.inputs), file).toEqual(['smoke']);
     }
+  });
+
+  // The fourth and fifth checks, applied to the tree as it stands: the parity job
+  // reads the committed baseline out of the checkout, no job may regenerate a
+  // record there, and the one mirror CI refreshes stays inside its guard.
+  it('has no workflow that rewrites a committed record, and none that refreshes the snapshot unguarded', () => {
+    for (const file of listWorkflows()) {
+      const { js } = parseWorkflow(fs.readFileSync(path.join(DEFAULT_DIR, file), 'utf8'));
+      expect(assessPinWrites(js), file).toEqual([]);
+    }
+  });
+
+  it('refreshes the schedule snapshot in exactly one place, on the cron branch of ci.yml', () => {
+    // If the refresh ever moves or gains a second home, the guard it carries has
+    // to move with it - and the pair below is what would notice.
+    const found: string[] = [];
+    for (const file of listWorkflows()) {
+      const { js } = parseWorkflow(fs.readFileSync(path.join(DEFAULT_DIR, file), 'utf8'));
+      const jobs = (js?.jobs ?? {}) as Record<string, any>;
+      for (const [jobName, job] of Object.entries(jobs)) {
+        for (const step of (job?.steps ?? []) as Array<Record<string, any>>) {
+          if (String(step?.run ?? '').includes('update:schedule')) found.push(`${file}:${jobName}`);
+        }
+      }
+    }
+    expect(found).toEqual(['ci.yml:matrix']);
   });
 
   it('finds only workflow files', () => {
@@ -377,12 +524,149 @@ describe('the gate is wired where it blocks merges', () => {
   });
 
   it('is reachable from ci-ok through the blocking gates job', () => {
-    // ci-ok needs [matrix, gates, perf-gate] and fails unless `gates`
-    // succeeded; gates runs gates-steps. That is the whole blocking chain.
+    // ci-ok needs [matrix, gates, perf-gate, soak, rehearsals, rehearsal-parity]
+    // and fails unless `gates` succeeded; gates runs gates-steps. That is the
+    // whole blocking chain.
     const ci = fs.readFileSync(path.join(DEFAULT_DIR, 'ci.yml'), 'utf8');
-    expect(ci).toMatch(/needs:\s*\[matrix,\s*gates,\s*perf-gate\]/);
+    expect(ci).toMatch(
+      /needs:\s*\[matrix,\s*gates,\s*perf-gate,\s*soak,\s*rehearsals,\s*rehearsal-parity\]/,
+    );
     expect(ci).toMatch(/if \[ "\$\{\{ needs\.gates\.result \}\}" != "success" \]/);
     expect(ci).toMatch(/uses:\s*\.\/\.github\/actions\/gates-steps/);
+  });
+
+  // The rehearsals (scripts/rehearse-sentinels.ps1,
+  // scripts/rehearse-lifecycle.mjs) exercise the PowerShell tools that decide a
+  // verdict, and they used to run on a maintainer's Windows box or nowhere. Their
+  // own pins live beside them; what is pinned HERE is the wiring that makes them
+  // blockers - a job that exists but that nothing waits on is the local habit the
+  // job was created to replace, and deleting it would leave every other pin here
+  // green.
+  it('gates the rehearsals job through ci-ok, and fails when it did not pass', () => {
+    const ci = fs.readFileSync(path.join(DEFAULT_DIR, 'ci.yml'), 'utf8');
+    expect(ci).toMatch(/if \[ "\$\{\{ needs\.rehearsals\.result \}\}" != "success" \]/);
+    // ...and the same for the cross-engine comparison those legs feed (its own,
+    // fuller pins live in tests/rehearsal-parity.test.ts).
+    expect(ci).toMatch(/if \[ "\$\{\{ needs\.rehearsal-parity\.result \}\}" != "success" \]/);
+    // The job itself: on a runner with PowerShell (pwsh is preinstalled on
+    // ubuntu-latest, which is why the rehearsals can be blockers at all), and
+    // without continue-on-error, which would make the verdict advisory.
+    const { js } = parseWorkflow(ci);
+    const job = js?.jobs?.rehearsals;
+    expect(job, 'ci.yml has no rehearsals job').toBeDefined();
+    expect(job['runs-on']).toBe('ubuntu-latest');
+    expect(job['continue-on-error']).toBeUndefined();
+    const steps = JSON.stringify(job.steps);
+    expect(steps, 'the rehearsals job must run every rehearsal').toContain('npm run rehearse:sentinels');
+    expect(steps, 'the rehearsals job must run every rehearsal').toContain('npm run rehearse:lifecycle');
+    expect(steps, 'the rehearsals job must run every rehearsal').toContain('npm run rehearse:transports');
+    // ...and name the engine first, so a runner with no PowerShell fails with
+    // REHEARSE_PWSH_MISSING instead of leaving a green job that ran nothing.
+    // (The step may quieten npm's banner, which is why this looks for the script
+    // name rather than for one exact invocation.)
+    expect(steps, 'the engine must be reported before anything is rehearsed').toContain('rehearse:which');
+    expect(steps.indexOf('rehearse:which')).toBeLessThan(steps.indexOf('rehearse:sentinels'));
+  });
+
+  // The soak (scripts/soak-supervisor.mjs) is the reload-leak checking, run
+  // against a REAL build. Its own pins live beside it in
+  // tests/soak-supervisor.test.ts, which soaks the same tool against a FIXTURE —
+  // a suite cannot demand that somebody ran `npm run build` first. What is pinned
+  // HERE is the wiring that makes the real run happen at all: a job that nothing
+  // builds for, or that nothing waits on, is the local habit it replaced.
+  it('gates the soak job through ci-ok, and fails when it did not pass', () => {
+    const ci = fs.readFileSync(path.join(DEFAULT_DIR, 'ci.yml'), 'utf8');
+    expect(ci).toMatch(/if \[ "\$\{\{ needs\.soak\.result \}\}" != "success" \]/);
+    const { js } = parseWorkflow(ci);
+    const job = js?.jobs?.soak as Record<string, any> | undefined;
+    expect(job, 'ci.yml has no soak job').toBeDefined();
+    expect(job!['runs-on']).toBe('ubuntu-latest');
+    // Not continue-on-error: a leak is a verdict, and an advisory one is the
+    // silent-death shape this job exists to avoid.
+    expect(job!['continue-on-error']).toBeUndefined();
+    // Bounded like every other job here, so a soak that hangs ends as a failure
+    // rather than as a runner that runs until the limit.
+    expect(Number(job!['timeout-minutes'])).toBeGreaterThan(0);
+
+    const steps = (job!.steps ?? []) as Array<Record<string, any>>;
+    const text = JSON.stringify(steps);
+    // The soak supervises the real `next start` over `.next`, so the job has to
+    // build first: without a build the tool refuses to start at all (exit 2), and
+    // that would be a red job proving nothing.
+    expect(text).toContain('npm run build');
+    expect(text.indexOf('npm run build')).toBeLessThan(text.indexOf('soak:supervisor'));
+    // TWELVE reloads: the smallest count at which every phase's descriptor floor
+    // is judged (four readings each — at three, the check reports itself as NOT
+    // JUDGED), and the count `--handle-slack` was measured against. A smaller
+    // number here would be a soak that runs and checks less than it claims.
+    expect(text, 'the soak must run enough reloads to judge every phase').toContain('--reloads 12');
+    // ...and reached through `--silent`, because this step REDIRECTS stdout into the
+    // artifact below: plain `npm run` prefixes its banner to stdout, which turns a
+    // green job's summary into a file nothing can parse. (The behavior itself is
+    // pinned beside the soak, in tests/soak-supervisor.test.ts.)
+    expect(text, 'the summary is redirected to a file, so npm must not write on stdout').toContain(
+      'npm run --silent soak:supervisor',
+    );
+    // Pinned to the oldest blocking leg, resolved the way the perf gate resolves
+    // it, so the two cannot drift into measuring different Nodes.
+    expect(steps.some((step) => String(step?.id ?? '') === 'node')).toBe(true);
+    expect(text).toContain('needs.matrix.outputs.legs');
+    expect(text).toContain('steps.node.outputs.version');
+    // And the account survives the run: a FAILING soak's summary, and the history
+    // the gate reads, are what a diagnosis needs most.
+    const upload = steps.find((step) => String(step?.uses ?? '').includes('upload-artifact'));
+    expect(upload, 'the soak job must upload the account of its run').toBeDefined();
+    expect(String(upload?.if)).toContain('always()');
+    expect(JSON.stringify(upload)).toContain('soak-summary.json');
+
+    // THE TREND, read after the soak wrote it: the record of what the run COST, which
+    // is the thing no single run's leak verdict can see. The path matters as much as
+    // the command — the gate has to read the file the soak wrote, so both name the
+    // run's own `--dir`, and the artifact carries that file forward.
+    expect(text, 'the job must judge the trend its own soak wrote').toContain('check:soak-trend');
+    expect(text).toContain('${{ runner.temp }}/soak/soak-trend.jsonl');
+    expect(text.indexOf('soak:supervisor')).toBeLessThan(text.indexOf('check:soak-trend'));
+    expect(JSON.stringify(upload)).toContain('soak-trend.jsonl');
+
+    // The app's OWN output travels with the account: a lost client is named by the ordinal it
+    // was handed to the door at, and that ordinal is on the request the client asked with — so
+    // the line that answers "what did the app do with it" is in the server's log, and an
+    // artifact without it names the client and stops there.
+    expect(text).toContain('${{ runner.temp }}/soak/server.log');
+    expect(JSON.stringify(upload)).toContain('server.log');
+  });
+
+  it('rehearses more than one PowerShell line, and each leg proves which one it got', () => {
+    // The defect this job caught was not a bug in a script but a property of the
+    // engine: ConvertFrom-Json converts an ISO instant to [DateTime] on every
+    // PowerShell 7, while Windows PowerShell 5.1 - the only engine the rehearsals
+    // had ever run on - leaves it a string. So a matrix of one line would report
+    // on engines it never saw, which is how a version-blind rehearsal passes.
+    const ci = fs.readFileSync(path.join(DEFAULT_DIR, 'ci.yml'), 'utf8');
+    const { js } = parseWorkflow(ci);
+    const engines: unknown = js?.jobs?.rehearsals?.strategy?.matrix?.pwsh;
+    expect(Array.isArray(engines), `no pwsh matrix in ci.yml: ${JSON.stringify(engines)}`).toBe(true);
+    const series = (engines as string[]).map(String);
+    expect(series.length, `one line is not a matrix: ${series}`).toBeGreaterThanOrEqual(2);
+    expect(new Set(series).size, `the legs must name distinct lines: ${series}`).toBe(series.length);
+    for (const s of series) expect(s, `a series, not a patch version: ${s}`).toMatch(/^7\.\d+$/);
+    // ...and each leg proves WHICH engine it got, through the rehearsals' own
+    // reporter rather than a second copy of the version check, and against the
+    // exact patch it installed rather than only the series: a leg that fell back to
+    // the image's pwsh - even one of the same series - would be a single engine
+    // wearing two version numbers, and the matrix would be decoration.
+    expect(ci, 'the leg must ask the rehearsals which engine they resolve').toMatch(
+      /npm run --silent rehearse:which/,
+    );
+    expect(ci, '...and compare it with the engine it installed').toMatch(
+      /steps\.pwsh\.outputs\.version/,
+    );
+    expect(ci, '...and fail when they differ').toMatch(/if \[ "\$got" != "\$want" \]/);
+    // The install step is what makes the matrix real: without it every leg would
+    // run the image's single engine.
+    expect(ci, 'the leg must install the engine it claims').toMatch(
+      /powershell-\$version-linux-x64\.tar\.gz/,
+    );
   });
 });
 

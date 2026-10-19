@@ -12,10 +12,34 @@
  *      them (the configured flag is the server gate; the client never
  *      re-derives it — ensureSelection cannot resurrect a dead provider).
  *   4. Empty live catalogs fall back to the entry's defaultModel.
+ *   5. What a provider published about a model is VISIBLE IN THE ROW while
+ *      choosing, not only on hover: each option carries a compact badge of the
+ *      two numbers a choice turns on — context window and price — with the
+ *      full line (the provider's own label for the model, the output budget,
+ *      tools, modalities) on the option's title and under the select for the
+ *      current selection. All of it verbatim; a provider that published
+ *      nothing produces no badge, no title and no line at all (never a zero,
+ *      never a guess), and a catalog that failed to refresh is labelled stale
+ *      rather than pretending to be the live list. A native option's text IS
+ *      its accessible name, so the badge is deliberately short — the detail
+ *      that would not fit is the part left to hover.
+ *   6. A row from the models.dev dataset is ATTRIBUTED ("via models.dev") in
+ *      that same badge and line. The two producers are never allowed to look
+ *      alike: the vendor's own number and a curated third party's number are
+ *      different claims, and the interface says which one it is showing.
+ *   7. Token counts keep their precision: 1,048,576 renders as "1.05M", not
+ *      "1M" — a formatter that rounds a true value away is the one place
+ *      this UI could misreport a number it was handed correctly.
  *
  * The fetch layer is stubbed at the global level with canned route payloads —
  * the components' contract is exactly the JSON shape of /api/models and
  * /api/projects/[id]/model, and this keeps the tests hermetic.
+ *
+ * Interactions go through `userEvent.setup({ delay: null })`. The direct
+ * `userEvent.selectOptions()` API defaults to `delay: 0`, which is a real
+ * `setTimeout(resolve, 0)` awaited between every key (user-event's `wait()`),
+ * so wall time becomes a function of scheduler contention instead of of the
+ * code under test. See tests/deploy-section.test.tsx for the measurement.
  */
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -32,6 +56,7 @@ const OLLAMA: ModelCatalogEntry = {
   configured: true,
   defaultModel: LISTED[0],
   models: LISTED,
+  metadata: {},
 };
 
 const GROQ_UNCONFIGURED: ModelCatalogEntry = {
@@ -40,6 +65,56 @@ const GROQ_UNCONFIGURED: ModelCatalogEntry = {
   configured: false,
   defaultModel: "llama-3.3-70b",
   models: ["llama-3.3-70b"],
+  metadata: {},
+};
+
+/** A provider that publishes facts, the way OpenRouter's catalog does. */
+const SONNET = "anthropic/claude-sonnet-4.6";
+const SONNET_FACTS =
+  "Anthropic: Claude Sonnet 4.6 · 1M ctx · max 128k out · $3/$15 per Mtok · tools · image";
+/** A row from the dataset, which fills providers that publish only ids. */
+const GPT = "gpt-4.1";
+const GPT_FACTS =
+  "GPT-4.1 · 1.05M ctx · max 32.8k out · $2/$8 per Mtok · tools · image+pdf · via models.dev";
+const OPENAI_DATASET: ModelCatalogEntry = {
+  id: "openai",
+  name: "OpenAI",
+  configured: true,
+  defaultModel: GPT,
+  models: [GPT],
+  metadata: {
+    [GPT]: {
+      source: "models.dev",
+      name: "GPT-4.1",
+      // The real published window — the number the old formatter rounded to 1M.
+      contextLength: 1_048_576,
+      maxCompletionTokens: 32_768,
+      pricePerMTokInput: 2,
+      pricePerMTokOutput: 8,
+      inputModalities: ["image", "pdf"],
+      supportsTools: true,
+    },
+  },
+};
+
+const OPENROUTER: ModelCatalogEntry = {
+  id: "openrouter",
+  name: "OpenRouter",
+  configured: true,
+  defaultModel: SONNET,
+  models: [SONNET],
+  metadata: {
+    [SONNET]: {
+      source: "provider",
+      name: "Anthropic: Claude Sonnet 4.6",
+      contextLength: 1_000_000,
+      maxCompletionTokens: 128_000,
+      pricePerMTokInput: 3,
+      pricePerMTokOutput: 15,
+      inputModalities: ["image"],
+      supportsTools: true,
+    },
+  },
 };
 
 /** Route → JSON payload served by the stubbed fetch. */
@@ -132,11 +207,12 @@ describe("ProjectModelPicker — per-project pin", () => {
       catalog: [OLLAMA, GROQ_UNCONFIGURED],
     });
 
+    const user = userEvent.setup({ delay: null });
     render(<ProjectModelPicker projectId="p3" refreshKey={0} />);
     const select = (await screen.findByLabelText("Model for this project")) as HTMLSelectElement;
 
     // Re-select "global" — already the committed pin → no PUT.
-    await userEvent.selectOptions(select, "global");
+    await user.selectOptions(select, "global");
     expect(hits.filter(([, m]) => m === "PUT")).toEqual([]);
   });
 });
@@ -175,13 +251,14 @@ describe("ModelPicker — global active model", () => {
       active: { providerId: "ollama", model: LISTED[0] },
     });
 
+    const user = userEvent.setup({ delay: null });
     render(<ModelPicker refreshKey={0} />);
     const select = (await screen.findByTitle("Active model")) as HTMLSelectElement;
     await waitFor(() => expect(select.value).toBe(`ollama::${LISTED[0]}`));
 
     // Re-select the same option — the onChange fires, but persist must
     // no-op (the pair is already committed).
-    await userEvent.selectOptions(select, `ollama::${LISTED[0]}`);
+    await user.selectOptions(select, `ollama::${LISTED[0]}`);
     expect(hits.filter(([, m]) => m === "POST")).toEqual([]);
   });
 
@@ -192,11 +269,12 @@ describe("ModelPicker — global active model", () => {
     });
     routes.set("/api/settings", {}); // the persist POST target
 
+    const user = userEvent.setup({ delay: null });
     render(<ModelPicker refreshKey={0} />);
     const select = (await screen.findByTitle("Active model")) as HTMLSelectElement;
     await waitFor(() => expect(select.value).toBe(`ollama::${LISTED[0]}`));
 
-    await userEvent.selectOptions(select, `ollama::${LISTED[1]}`);
+    await user.selectOptions(select, `ollama::${LISTED[1]}`);
     await waitFor(() => expect(hits.filter(([, m]) => m === "POST")).toHaveLength(1));
     expect(hits[0]).toEqual([
       "/api/settings",
@@ -246,5 +324,163 @@ describe("ModelOptgroups — the shared client-side catalog rules", () => {
       </select>,
     );
     expect(screen.queryAllByRole("group")).toHaveLength(0);
+  });
+
+  it("puts the published facts in the row itself, with the full line as its title", () => {
+    render(
+      <select>
+        <ModelOptgroups entries={[OPENROUTER]} />
+      </select>,
+    );
+    // What you see while choosing, without hovering: the id and the two
+    // numbers that decide the choice.
+    const opt = screen.getByRole("option", {
+      name: `${SONNET} — 1M ctx · $3/$15`,
+    });
+    expect(opt.textContent).toBe(`${SONNET} — 1M ctx · $3/$15`);
+    // The rest of the published facts — the provider's own label, the output
+    // budget, tools, modalities — stay on the title, verbatim.
+    expect(opt.getAttribute("title")).toBe(SONNET_FACTS);
+  });
+
+  it("badges a one-sided price as one-sided rather than inventing the other side", () => {
+    render(
+      <select>
+        <ModelOptgroups
+          entries={[
+            {
+              ...OPENROUTER,
+              metadata: {
+                [SONNET]: {
+                  source: "provider" as const,
+                  contextLength: 1_000_000,
+                  pricePerMTokInput: 3,
+                },
+              },
+            },
+          ]}
+        />
+      </select>,
+    );
+    expect(screen.getByRole("option", { name: /\$3\/\$/ }).textContent).toBe(
+      `${SONNET} — 1M ctx · $3/$?`,
+    );
+  });
+
+  it("leaves the row and the title alone when the provider published no facts", () => {
+    render(
+      <select>
+        <ModelOptgroups entries={[OLLAMA]} />
+      </select>,
+    );
+    const opt = screen.getByRole("option", { name: LISTED[0] });
+    expect(opt.getAttribute("title")).toBeNull();
+    // No dangling separator either — the row is exactly the model id.
+    expect(opt.textContent).toBe(LISTED[0]);
+  });
+
+  it("labels a catalog that failed to refresh as stale, and keeps its models", () => {
+    render(
+      <select>
+        <ModelOptgroups
+          entries={[{ ...OPENROUTER, stale: true, error: "unreachable" }]}
+        />
+      </select>,
+    );
+    expect(
+      (screen.getByRole("group") as HTMLElement).getAttribute("label"),
+    ).toBe("OpenRouter (stale)");
+    // Stale is not empty: the last good catalog is still usable.
+    expect(
+      screen.getByRole("option", { name: /anthropic\/claude-sonnet-4\.6/ }),
+    ).toBeTruthy();
+  });
+
+  it("attributes a dataset row, and keeps the token counts it was given", () => {
+    render(
+      <select>
+        <ModelOptgroups entries={[OPENAI_DATASET]} />
+      </select>,
+    );
+    // The attribution rides in the row too: while choosing, a price you can
+    // see must say whose number it is. 1,048,576 keeps its precision.
+    const opt = screen.getByRole("option", {
+      name: `${GPT} — 1.05M ctx · $2/$8 · via models.dev`,
+    });
+    expect(opt.getAttribute("title")).toBe(GPT_FACTS);
+  });
+
+  it("still reports a real failure as a failure", () => {
+    render(
+      <select>
+        <ModelOptgroups entries={[{ ...OLLAMA, error: "unreachable" }]} />
+      </select>,
+    );
+    expect(
+      (screen.getByRole("group") as HTMLElement).getAttribute("label"),
+    ).toBe("Ollama (local) (unreachable)");
+  });
+});
+
+describe("the selection's published facts", () => {
+  it("shows them in the row and under the global picker for the active model", async () => {
+    routes.set("/api/models", {
+      providers: [OPENROUTER, OLLAMA],
+      active: { providerId: "openrouter", model: SONNET },
+    });
+
+    render(<ModelPicker refreshKey={0} />);
+
+    const select = (await screen.findByTitle("Active model")) as HTMLSelectElement;
+    // The closed select displays the selected row verbatim, so the facts are
+    // on screen before the list is even opened — this is what "visible while
+    // choosing" means for a native select, and it is asserted on the real
+    // element rather than on a lookalike span.
+    await waitFor(() =>
+      expect(select.options[select.selectedIndex]?.textContent).toBe(
+        `${SONNET} — 1M ctx · $3/$15`,
+      ),
+    );
+    expect(await screen.findByText(SONNET_FACTS)).toBeTruthy();
+  });
+
+  it("attributes the dataset's facts in the row for an ids-only provider", async () => {
+    routes.set("/api/models", {
+      providers: [OPENAI_DATASET],
+      active: { providerId: "openai", model: GPT },
+    });
+
+    render(<ModelPicker refreshKey={0} />);
+
+    await screen.findByRole("option", {
+      name: `${GPT} — 1.05M ctx · $2/$8 · via models.dev`,
+    });
+    expect(await screen.findByText(GPT_FACTS)).toBeTruthy();
+  });
+
+  it("shows no line at all for a provider that published nothing", async () => {
+    routes.set("/api/models", {
+      providers: [OLLAMA],
+      active: { providerId: "ollama", model: LISTED[0] },
+    });
+
+    render(<ModelPicker refreshKey={0} />);
+
+    await screen.findByRole("option", { name: LISTED[0] });
+    expect(screen.queryByText(/ctx/)).toBeNull();
+  });
+
+  it("describes the pinned model in a project's picker", async () => {
+    routes.set("/api/projects/p4/model", {
+      override: { providerId: "openrouter", modelId: SONNET },
+      default: { providerId: "ollama", modelId: LISTED[0] },
+      catalog: [OPENROUTER, OLLAMA],
+    });
+
+    render(<ProjectModelPicker projectId="p4" refreshKey={0} />);
+
+    // The pin badge is the "data loaded" signal this picker already has.
+    await screen.findByText("pinned");
+    expect(screen.getByText(SONNET_FACTS)).toBeTruthy();
   });
 });

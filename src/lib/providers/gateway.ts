@@ -3,7 +3,12 @@ import type { LanguageModel } from "ai";
 import type { ProviderConfig, Settings } from "../types";
 import { getProject, listProjects } from "../store";
 import { cloudflareApiBase } from "../deploy/cloudflare";
-import { fetchModels } from "../models-catalog";
+import { readModelCatalog, type ModelMetadata } from "../models-catalog";
+import {
+  hasModelFactsSource,
+  modelFactsFor,
+  warmModelFacts,
+} from "./model-facts";
 import { DEFAULT_PROVIDERS } from "./registry";
 
 const SETTINGS_FILE = "providers.json";
@@ -542,36 +547,88 @@ export function hasUnexpandedAccount(baseURL: string): boolean {
 }
 
 /**
+ * A provider's live catalog, plus how the read went. `metadata` carries the
+ * facts known about each model, each row saying which producer published it
+ * (see ModelMetadata): what the provider itself said, or — for the many
+ * providers that answer with bare ids — the models.dev dataset, whose rows
+ * are marked so the UI can attribute them. Empty for a model nobody
+ * published a fact about.
+ */
+export interface ProviderModelList {
+  models: string[];
+  metadata: Record<string, ModelMetadata>;
+  /** Present when the provider is unusable or its last attempt failed. */
+  error?: string;
+  /**
+   * True when this is the previously fetched catalog and the refresh failed.
+   * `error` says why, and the models are still the provider's own — just
+   * older than the fresh window. A blip must not blank a working picker.
+   */
+  stale?: boolean;
+}
+
+/**
  * The live model list a provider currently serves, with the shared
  * reachability contract: unconfigured providers and un-expanded Workers AI
  * URLs are skipped (models: []), and fetch failures degrade to an `error`
  * note instead of throwing. The single definition used by both catalog
  * routes (global picker and per-project pin picker).
+ *
+ * The read goes through the catalog cache (readModelCatalog), so the two
+ * routes and the two pickers in the header collapse into one request per
+ * provider per window instead of one per open — and the failure labels
+ * survive that path unchanged.
  */
 export async function listProviderModels(
   p: ProviderConfig,
   settings: Settings,
-): Promise<{ models: string[]; error?: string }> {
+): Promise<ProviderModelList> {
   if (!hasProviderCredentials(p, settings)) {
-    return { models: [], error: "No API key configured" };
+    return { models: [], metadata: {}, error: "No API key configured" };
   }
   const baseURL = effectiveBaseURL(p, settings);
   if (!baseURL || hasUnexpandedAccount(baseURL)) {
-    return { models: [] };
+    return { models: [], metadata: {} };
   }
-  try {
-    return {
-      models: await fetchModels(baseURL, providerApiKey(p, settings)),
-    };
-  } catch (e) {
-    return {
-      models: [],
-      error:
-        e instanceof Error && e.name === "AbortError"
-          ? "timeout"
-          : "unreachable",
-    };
+  const { models, metadata, error, stale } = await readModelCatalog(
+    baseURL,
+    providerApiKey(p, settings),
+  );
+  return {
+    models,
+    metadata: mergeModelFacts(p.id, models, metadata),
+    ...(error ? { error } : {}),
+    ...(stale ? { stale: true } : {}),
+  };
+}
+
+/**
+ * One row per model, one producer per row: what the provider published about
+ * a model wins outright, and the dataset fills the models the provider said
+ * nothing about (marked with its provenance). Never a blend — mixing two
+ * producers inside one row would need per-field provenance, which the UI has
+ * no way to show, and the two disagree often enough for that to matter.
+ */
+function mergeModelFacts(
+  providerId: string,
+  models: string[],
+  published: Record<string, ModelMetadata>,
+): Record<string, ModelMetadata> {
+  const merged: Record<string, ModelMetadata> = {};
+  let gap = false;
+  for (const id of models) {
+    const row = published[id] ?? modelFactsFor(providerId, id);
+    if (row) merged[id] = row;
+    else gap = true;
   }
+  // Only a catalog with a gap is worth asking the dataset about, and only
+  // for a provider the mapping declares — an OpenRouter-only setup, where
+  // every model already carries its provider's own facts, never downloads
+  // the document at all. The load is never awaited: the picker must not wait
+  // on 4 MB, so the first open after a cold start shows ids and the warmed
+  // rows appear on the next one.
+  if (gap && hasModelFactsSource(providerId)) warmModelFacts();
+  return merged;
 }
 
 export interface ProviderHealth {

@@ -12,7 +12,7 @@
  * worst possible moment. Three comments, one space each, and nothing noticed
  * for weeks: the definition of a green run that is not a verdict.
  *
- * Three checks, all on the PARSED document rather than the text:
+ * Five checks, all on the PARSED document rather than the text:
  *
  *   1. PARSE   — strict YAML with unique keys. Catches malformed structure,
  *                duplicate keys, and comments glued to a value (MISSING_CHAR).
@@ -26,6 +26,21 @@
  *                or a job-level override), so a permission granted anywhere
  *                that actually applies counts. A missing grant is the exact
  *                403 that lost the Oct 3 verdict.
+ *   4. WRITE   — no workflow REGENERATES a committed record (`--write-golden`
+ *                for the rehearsal baseline, `new:pin` for the generated
+ *                pins). A runner's checkout is discarded, so a job that both
+ *                rewrote a record and checked it reports PASS about a file
+ *                nobody has, and a job that committed the result would be
+ *                re-making the pin with the very run it is supposed to judge.
+ *                Both are looked for in the parsed tree, so explaining them in
+ *                a workflow COMMENT is fine and naming one in a step is not.
+ *   5. REFRESH — the ONE pin CI does rewrite, the upstream schedule snapshot,
+ *                may only be refreshed on a run that can commit it: a step with
+ *                no trigger guard, or one in a job without contents: write,
+ *                rewrites a file the runner then throws away (and on a push it
+ *                would be self-triggering). The audit behind the two lists —
+ *                which writers of committed files exist at all, and why the
+ *                snapshot is the exception — is in assessPinWrites.
  *
  * Parsed, not regexed, on purpose: tests/heartbeat-schedule-grace.test.ts
  * already greps the raw text for the `issues: write` case. That grep cannot
@@ -215,6 +230,152 @@ export function collectCrons(js) {
 }
 
 /**
+ * The pin-write policy: every committed artifact here that a script can
+ * REGENERATE, and what CI is allowed to do with it.
+ *
+ * The audit this list came from: `grep -n writeFileSync scripts/*` finds exactly
+ * three writers of COMMITTED files — `--write-golden`
+ * (scripts/rehearsal-parity.mjs), `new:pin` (scripts/new-generated-pin.mjs), and
+ * `update:schedule` (scripts/update-schedule.js). The other writers it finds
+ * hold no pin, because every one of them writes outside the tracked tree: the
+ * rehearsals' worlds, ledgers and round-trip files go to the system temp
+ * directory (scripts/rehearse-world.mjs, rehearse-lifecycle.mjs,
+ * rehearse-roundtrip.mjs, rehearse-sentinels.ps1), the rotator's run
+ * directory is the gitignored .freebuff/ (scripts/rotate.mjs),
+ * ci-compute-matrix.js appends to $GITHUB_OUTPUT, and the mock provider's
+ * mock-requests-<port>.json is untracked and written next to whatever cwd it
+ * runs in. Re-run that grep before trusting this list.
+ *
+ * They are not the same kind of thing, and the difference decides the rule:
+ *
+ *   - a RECORD — the rehearsal baseline, the generated pins — is evidence about
+ *     behaviour this repository already had. Regenerating it where it is checked
+ *     makes the check vacuous: in CI's discarded checkout it is a PASS about a
+ *     file nobody has, and a workflow that committed it would be re-making the
+ *     pin with the very run it is supposed to judge (`verify:generated --strict`
+ *     reading a pin that this run wrote is self-approval). CI checks these and
+ *     never writes them — the writer is a maintainer command, and the change has
+ *     to land as a commit somebody reviews.
+ *   - a MIRROR — the schedule snapshot — is a copy of something UPSTREAM whose
+ *     freshness is the entire point, so CI does refresh it, on a scheduled or
+ *     main-ref dispatch only, in the one job holding `contents: write`, so the
+ *     refresh lands as a bot commit instead of evaporating with the runner.
+ *
+ * Exported, both halves, so the policy is the thing that is pinned — a new
+ * pattern or a new exception has to be a deliberate edit.
+ */
+export const PIN_WRITERS = [
+  {
+    pin: "the committed rehearsal baseline (scripts/rehearsal-golden/)",
+    patterns: ["--write-golden"],
+  },
+  {
+    pin: "the committed generated pins (tests/generated/)",
+    patterns: ["new:pin", "new-generated-pin"],
+  },
+];
+
+/** The one pin CI MAY rewrite, and the guard that has to be on the step. */
+export const REFRESHABLE_PIN = {
+  pin: "the committed schedule snapshot (scripts/node-schedule.json)",
+  patterns: ["update:schedule"],
+  // The triggers it is allowed to run on: a refresh that runs on a push or PR
+  // writes a file the runner throws away, and on a push it would be
+  // self-triggering. Its result only counts where it can be committed.
+  triggers: ["schedule", "workflow_dispatch"],
+};
+
+/** The permissions that actually apply to a job: its own block, else the workflow's. */
+function effectivePermissions(js, job) {
+  if (job.permissions && typeof job.permissions === "object") return job.permissions;
+  return js.permissions;
+}
+
+/** True when `permissions` grants contents:write, at any level that applies. */
+function grantsContentsWrite(value) {
+  if (!value || typeof value !== "object") return false;
+  return value.contents === "write";
+}
+
+/** Locate a step inside its job, so a finding names the step a reader must open. */
+function stepLabel(step, index) {
+  return `steps[${index}]${step.name ? ` (${step.name})` : ""}`;
+}
+
+/**
+ * The two halves of the policy, applied to one parsed workflow.
+ *
+ *   - a step that runs a RECORD's writer is a `write` finding, whatever it is
+ *     guarded by (there is no run of CI in which rewriting it is right);
+ *   - a step that runs the MIRROR's writer without its trigger guard, or in a job
+ *     that cannot commit the result, is a `refresh` finding.
+ *
+ * Comments are not part of the parsed tree, so a workflow can explain either rule
+ * in prose and cannot act on it in a step. `unknown` rather than a tree because
+ * that is what it accepts: anything without one (an unparseable document, a
+ * string) has no jobs to walk, and being inert there is the honest answer.
+ *
+ * @param {unknown} js
+ * @returns {Finding[]}
+ */
+export function assessPinWrites(js) {
+  const problems = [];
+  if (!js || typeof js !== "object") return problems;
+  const document = /** @type {Record<string, any>} */ (js);
+  const jobs = document.jobs && typeof document.jobs === "object" ? document.jobs : {};
+  for (const [jobName, job] of Object.entries(jobs)) {
+    if (!job || typeof job !== "object") continue;
+    const steps = Array.isArray(job.steps) ? job.steps : [];
+    steps.forEach((step, index) => {
+      if (!step || typeof step !== "object") return;
+      const strings = collectStrings(step);
+
+      for (const record of PIN_WRITERS) {
+        const pattern = record.patterns.find((p) => strings.some((s) => s.includes(p)));
+        if (!pattern) continue;
+        problems.push(
+          finding(
+            "write",
+            `runs ${record.pin} in write mode (${pattern}) — CI checks a record and never ` +
+              "regenerates it: here the write evaporates with the checkout, and committed it " +
+              "would re-make the very pin this run is judging",
+            { where: `jobs.${jobName}.${stepLabel(step, index)}` },
+          ),
+        );
+      }
+
+      const refresh = REFRESHABLE_PIN.patterns.find((p) => strings.some((s) => s.includes(p)));
+      if (!refresh) return;
+      const guard = String(step.if ?? "");
+      const trigger = REFRESHABLE_PIN.triggers.find((t) => guard.includes(t));
+      if (!trigger) {
+        problems.push(
+          finding(
+            "refresh",
+            `refreshes ${REFRESHABLE_PIN.pin} (${refresh}) with no trigger guard — it ` +
+              `rewrites a committed file, so it may only run on ${REFRESHABLE_PIN.triggers.join(" or ")} ` +
+              "(an unconditional step also runs on push and PR, where the refresh is thrown away " +
+              "and, on a push, self-triggering)",
+            { where: `jobs.${jobName}.${stepLabel(step, index)}` },
+          ),
+        );
+      } else if (!grantsContentsWrite(effectivePermissions(document, job))) {
+        problems.push(
+          finding(
+            "refresh",
+            `refreshes ${REFRESHABLE_PIN.pin} (${refresh}) in a job without contents: write — ` +
+              "the refresh only counts where it can be committed, and this job would rewrite a " +
+              "copy the runner discards",
+            { where: `jobs.${jobName}.${stepLabel(step, index)}` },
+          ),
+        );
+      }
+    });
+  }
+  return problems;
+}
+
+/**
  * A workflow that posts an issue comment needs issues: write, resolved from
  * the parsed tree. A job-level `permissions` block OVERRIDES the workflow
  * level, so a job that posts must be judged by the permissions that actually
@@ -223,7 +384,6 @@ export function collectCrons(js) {
 export function assessPermissions(js) {
   const problems = [];
   if (!js || typeof js !== "object") return problems;
-  const workflowPerms = js.permissions;
   const posts = collectStrings(js).some((s) => ISSUE_COMMENT_PATH.test(s));
   if (!posts) return problems;
   const jobs = js.jobs && typeof js.jobs === "object" ? js.jobs : {};
@@ -235,10 +395,7 @@ export function assessPermissions(js) {
     // does not merge with it. So a job that declares its own block is
     // judged by that block alone, and falling back to the workflow level
     // would resurrect a grant GitHub never applies to it.
-    const effective =
-      job.permissions && typeof job.permissions === "object"
-        ? job.permissions
-        : workflowPerms;
+    const effective = effectivePermissions(js, job);
     if (!grantsIssuesWrite(effective)) {
       problems.push(
         finding(
@@ -265,6 +422,7 @@ export function checkWorkflow(name, text) {
     problems.push(...validateCron(expr, where));
   }
   problems.push(...assessPermissions(js));
+  problems.push(...assessPinWrites(js));
   return problems.map((p) => ({ ...p, file: name }));
 }
 
@@ -301,7 +459,11 @@ export function formatReport(result, dir = DEFAULT_DIR) {
     }
   }
   if (result.failures.length === 0) {
-    lines.push("  every workflow parses, every cron is well-formed, every comment poster is permitted");
+    lines.push(
+      "  every workflow parses, every cron is well-formed, every comment poster is " +
+        "permitted, no workflow rewrites a committed record, and the one pin CI does " +
+        "refresh stays gated to the runs that can commit it",
+    );
     lines.push("WORKFLOW_CONTRACT PASS");
   } else {
     const count = result.failures.reduce((n, f) => n + f.problems.length, 0);

@@ -24,7 +24,6 @@ import {
   scheduleBaseline,
   deriveGrace,
   gradeSlot,
-  RECEIPTS,
   gradeReceipt,
   assessReceipt,
   reportAs,
@@ -33,9 +32,16 @@ import {
   parseCron,
   prevFireBefore,
   formatLag,
-  TRIPPERS,
   assessTrip,
+  gradeTripClearance,
+  assessTripStanding,
+  SELF_MARKER,
 } from '../scripts/heartbeat-audit.mjs';
+
+// RECEIPTS and TRIPPERS are derived views over the single declaration, so they
+// are imported from IT rather than from the auditor: heartbeat-audit.mjs keeps
+// no copy of a marker, a window or a verdict shape to drift out of step.
+import { WORKFLOWS, contractFor, RECEIPTS, TRIPPERS } from '../scripts/verdict-contract.mjs';
 
 const MIN = 60 * 1000;
 const HOUR = 60 * MIN;
@@ -49,6 +55,27 @@ const CODEQL_START = Date.parse('2026-09-28T17:41:38Z'); // 8h18m38s late
 const DRILL_DUE = Date.parse('2026-09-28T08:23:00Z');
 const DRILL_START = Date.parse('2026-09-28T16:48:54Z'); // 8h25m54s late
 const WORST_OBSERVED_LAG_MS = DRILL_START - DRILL_DUE;
+
+// The two real #18 comments the trip and receipt cases below turn on, verbatim
+// in the parts that matter - both are quotes from the live issue, not
+// inventions:
+//   6073315277 - the receipt recovered onto #18 five days after the trip;
+//   5998613523 - the 2026-10-05 heartbeat complaint, which QUOTES the missing
+//                marker while reporting that it is missing. It is the trap in
+//                both directions: an auditor that reads its own complaint as a
+//                receipt (or as a clearance) has talked itself out of its own
+//                finding.
+const RECOVERED_PASS = {
+  id: 6073315277,
+  created_at: '2026-10-09T02:56:39Z',
+  body: 'post-Oct-3 verifier (run 37157439771, 2026-10-03): **PASS_REFRESHED**',
+};
+const HEARTBEAT_COMPLAINT = {
+  id: 5998613523,
+  created_at: '2026-10-05T16:26:10Z',
+  body: 'Weekly schedule heartbeat (2026-10-05): **2 finding(s)** - the Oct 3 verdict was never ' +
+    'recorded on #18 (no comment carrying `post-Oct-3 verifier` since 2026-10-03T07:47:00.000Z).',
+};
 
 describe('slot/run matching', () => {
   it('claims the LATEST slot a run could satisfy, not the oldest', () => {
@@ -272,14 +299,14 @@ describe('receipts: a run that started is not a verdict that landed', () => {
     const receipt = RECEIPTS['oct3-verify.yml'];
     expect(receipt.marker).toBe('post-Oct-3 verifier');
     // The run exists and succeeded. #18 has nothing. That is the finding.
-    const g = gradeReceipt(receipt.marker, [
+    const g = gradeReceipt(receipt, [
       comment(1, '2026-09-28T16:00:00Z', 'Weekly verifier drill FAILED (schedule)'),
     ], PERIOD_START);
     expect(g.verdict).toBe('unrecorded');
   });
 
   it('is satisfied by the verdict actually landing', () => {
-    const g = gradeReceipt(RECEIPTS['oct3-verify.yml'].marker, [
+    const g = gradeReceipt(RECEIPTS['oct3-verify.yml'], [
       comment(5910053613, '2026-10-03T22:12:00Z', 'post-Oct-3 verifier (run 37157439771, 2026-10-03): **PASS_REFRESHED**'),
     ], PERIOD_START);
     expect(g.verdict).toBe('receipted');
@@ -289,7 +316,7 @@ describe('receipts: a run that started is not a verdict that landed', () => {
 
   it('will not accept a verdict from some other day as this day\'s receipt', () => {
     // The whole point of the window: last month\'s PASS is not October\'s.
-    const g = gradeReceipt(RECEIPTS['oct3-verify.yml'].marker, [
+    const g = gradeReceipt(RECEIPTS['oct3-verify.yml'], [
       comment(7, '2026-09-30T11:15:51Z', 'post-Oct-3 verifier (run 123, 2026-09-30): **PASS_REFRESHED**'),
     ], PERIOD_START);
     expect(g.verdict).toBe('unrecorded');
@@ -301,7 +328,7 @@ describe('receipts: a run that started is not a verdict that landed', () => {
     // or every retry would read as a lost verdict. periodStart is the FIRST
     // due slot for exactly this reason.
     const first = Date.parse('2026-10-28T07:23:00Z');
-    const g = gradeReceipt(RECEIPTS['oct28-verify.yml'].marker, [
+    const g = gradeReceipt(RECEIPTS['oct28-verify.yml'], [
       comment(9, '2026-10-28T07:31:00Z', 'post-Oct-28 verifier (run 37157439771, 2026-10-28): **NO_DISPATCH_RUN**'),
     ], first);
     expect(g.verdict).toBe('receipted');
@@ -309,11 +336,26 @@ describe('receipts: a run that started is not a verdict that landed', () => {
 
   it('ignores comments from other workflows that share the issue', () => {
     // #18 is a shared runway. A drill comment is not the Oct 3 verdict.
-    const g = gradeReceipt(RECEIPTS['oct3-verify.yml'].marker, [
+    const g = gradeReceipt(RECEIPTS['oct3-verify.yml'], [
       comment(5856439891, '2026-09-27T13:50:33Z', 'Weekly verifier drill FAILED'),
       comment(5910053613, '2026-10-03T22:12:00Z', 'post-Oct-28 verifier (run 1, 2026-10-03): **PASS**'),
     ], PERIOD_START);
     expect(g.verdict).toBe('unrecorded');
+  });
+
+  it("never credits the auditor's own complaint as the record it reports missing", () => {
+    // The live bug, from the real comment set: the 2026-10-05 heartbeat reported
+    // "the Oct 3 verdict was never recorded on #18" - and that complaint quotes
+    // the marker, so every later audit read it as the receipt. The lost verdict
+    // was whitewashed by the comment announcing the loss, and it stayed silent
+    // until the receipt genuinely landed on 2026-10-09.
+    expect(HEARTBEAT_COMPLAINT.body).toContain(RECEIPTS['oct3-verify.yml'].marker);
+    expect(gradeReceipt(RECEIPTS['oct3-verify.yml'], [HEARTBEAT_COMPLAINT], PERIOD_START).verdict)
+      .toBe('unrecorded');
+    // With the real receipt beside it, the credit goes to the real receipt.
+    const g = gradeReceipt(RECEIPTS['oct3-verify.yml'], [HEARTBEAT_COMPLAINT, RECOVERED_PASS], PERIOD_START);
+    expect(g.verdict).toBe('receipted');
+    expect(g.first?.id).toBe(6073315277);
   });
 
   it('owes nobody a receipt when no contract is declared', () => {
@@ -330,7 +372,7 @@ describe('receipts: a run that started is not a verdict that landed', () => {
   });
 
   it('survives a malformed comment rather than throwing mid-audit', () => {
-    const g = gradeReceipt(RECEIPTS['oct3-verify.yml'].marker, [
+    const g = gradeReceipt(RECEIPTS['oct3-verify.yml'], [
       null as never,
       { id: 1 } as never,
       comment(2, 'not-a-date', 'post-Oct-3 verifier'),
@@ -341,7 +383,7 @@ describe('receipts: a run that started is not a verdict that landed', () => {
   });
 
   it('counts a re-posted duplicate honestly rather than inflating the count', () => {
-    const g = gradeReceipt(RECEIPTS['oct3-verify.yml'].marker, [
+    const g = gradeReceipt(RECEIPTS['oct3-verify.yml'], [
       comment(1, '2026-10-03T22:12:00Z', 'post-Oct-3 verifier: **PASS_REFRESHED**'),
       comment(2, '2026-10-03T22:12:30Z', 'post-Oct-3 verifier: **PASS_REFRESHED**'),
     ], PERIOD_START);
@@ -508,12 +550,12 @@ describe('the receipt window opens at the period\'s FIRST due slot', () => {
     // 19:33 slot would discard the verdict the 07:23 attempt already recorded,
     // and file a lost-verdict finding against a healthy chain.
     const first = periodStart(slots, 0);
-    const g = gradeReceipt(RECEIPTS['oct28-verify.yml'].marker, [
+    const g = gradeReceipt(RECEIPTS['oct28-verify.yml'], [
       { id: 1, created_at: '2026-10-28T07:31:00Z', body: 'post-Oct-28 verifier: **NO_DISPATCH_RUN**' },
     ], first);
     expect(g.verdict).toBe('receipted');
     // ...and the same comment judged against the LAST slot is not:
-    const wrong = gradeReceipt(RECEIPTS['oct28-verify.yml'].marker, [
+    const wrong = gradeReceipt(RECEIPTS['oct28-verify.yml'], [
       { id: 1, created_at: '2026-10-28T07:31:00Z', body: 'post-Oct-28 verifier: **NO_DISPATCH_RUN**' },
     ], slots[slots.length - 1]);
     expect(wrong.verdict).toBe('unrecorded');
@@ -649,6 +691,229 @@ describe('a tripped sentinel is a verdict, not a dead cron', () => {
   });
 });
 
+// A trip is raised by a run conclusion - a moment - but the gap it names is a
+// fact about the durable record, and the two come apart. They did: the Oct 4
+// trip was filed on 2026-10-04 because the Oct 3 chain had recorded no receipt,
+// that receipt was recovered onto #18 on 2026-10-09, the sentinel itself went
+// green - and nothing in the auditor could notice. It would have re-filed the
+// same one-morning conclusion every week for a year. These pins are built on
+// those two real comment bodies, not on invented ones.
+describe('a trip is a finding only while the gap it names is still real', () => {
+  const OCT4 = TRIPPERS['oct4-sentinel.yml'];
+  const TRIP_RUN = {
+    id: 37183204922,
+    status: 'completed',
+    conclusion: 'failure',
+    run_started_at: '2026-10-04T06:34:35Z',
+  };
+  const filedAt = Date.parse(TRIP_RUN.run_started_at);
+
+  it('retires the real stale trip: the receipt it waited for landed after it', () => {
+    const g = gradeTripClearance(OCT4.cleared, [HEARTBEAT_COMPLAINT, RECOVERED_PASS], filedAt);
+    expect(g.verdict).toBe('superseded');
+    expect(g.first?.id).toBe(6073315277);
+    expect(g.first?.created_at).toBe('2026-10-09T02:56:39Z');
+    expect(g.count).toBe(1);
+  });
+
+  it('is not satisfied by a comment that merely names the missing receipt', () => {
+    expect(HEARTBEAT_COMPLAINT.body).toContain(OCT4.cleared.marker);
+    expect(gradeTripClearance(OCT4.cleared, [HEARTBEAT_COMPLAINT], filedAt).verdict).toBe('standing');
+  });
+
+  it('refuses a receipt recorded BEFORE the trip', () => {
+    // A trip is stale for having been contradicted by later evidence, never for
+    // having been wrong when it was filed.
+    const earlier = { ...RECOVERED_PASS, created_at: '2026-10-04T05:00:00Z' };
+    expect(gradeTripClearance(OCT4.cleared, [earlier], filedAt).verdict).toBe('standing');
+  });
+
+  it("enforces the sentinel's own window rather than trusting the caller's query", () => {
+    // The comment list is passed IN, so a mis-wired caller (the whole issue
+    // instead of the sentinel's own query) must not change the answer: a
+    // verdict from before the window the sentinel reads would not have
+    // satisfied the sentinel either, so it cannot retire its trip. The pair
+    // below cannot arise from main() - which passes the sentinel's query - and
+    // pins the guard that makes the function safe for whatever it is handed.
+    const oct29 = TRIPPERS['oct29-sentinel.yml'];
+    const otherDay = { id: 1, created_at: '2026-10-20T00:00:00Z', body: 'post-Oct-28 verifier: **PASS_PROMOTED**' };
+    // Marker and PASS both fit; only the window rules it out.
+    expect(gradeTripClearance(oct29.cleared, [otherDay], Date.parse('2026-10-05T00:00:00Z')).verdict)
+      .toBe('standing');
+  });
+
+  it('never retires a trip on the auditor\'s own report about it', () => {
+    // The worst case: a heartbeat complaint that quotes BOTH the marker and a
+    // bold verdict while reporting that the receipt is missing. Without the
+    // self-witness exemption this retires the very trip it describes, and the
+    // auditor talks itself out of its own finding.
+    const selfReport = {
+      id: 5998613523,
+      created_at: '2026-10-06T16:26:10Z',
+      body: `${SELF_MARKER}2026-10-06): **1 finding(s)** - the Oct 3 verdict was never recorded on #18 ` +
+        '(no comment carrying `post-Oct-3 verifier`, the same morning that recorded **PASS_REFRESHED**).',
+    };
+    expect(selfReport.body).toContain(OCT4.cleared.marker);
+    expect(OCT4.cleared.shape.test(selfReport.body)).toBe(true);
+    expect(gradeTripClearance(OCT4.cleared, [selfReport], filedAt).verdict).toBe('standing');
+    // ...even when a real receipt sits beside it, only the real one counts.
+    const g = gradeTripClearance(OCT4.cleared, [selfReport, RECOVERED_PASS], filedAt);
+    expect(g.verdict).toBe('superseded');
+    expect(g.first?.id).toBe(6073315277);
+  });
+
+  it('retires only on a PASS - every other verdict is the same gap, renamed', () => {
+    const others = ['ATTENTION_PUSH_STEP_FAILED', 'FAIL_PRE_PROMO', 'CRON_NOT_FOUND', 'NO_DISPATCH_RUN', 'SENTINEL_RUN_NO_PASS'];
+    for (const verdict of others) {
+      const c = { ...RECOVERED_PASS, body: `post-Oct-3 verifier: **${verdict}**` };
+      expect(gradeTripClearance(OCT4.cleared, [c], filedAt).verdict, verdict).toBe('standing');
+    }
+    expect(OCT4.cleared.shape.test('**PASS_REFRESHED**')).toBe(true);
+    // The sentinel's own trip marker contains the letters PASS and is not one.
+    expect(OCT4.cleared.shape.test('**SENTINEL_RUN_NO_PASS**')).toBe(false);
+  });
+
+  it('never invents a clearance a contract does not declare', () => {
+    expect(gradeTripClearance(undefined, [RECOVERED_PASS], filedAt)).toEqual({ verdict: 'no-clearance' });
+    expect(assessTripStanding({ contract: RECEIPTS['oct3-verify.yml'], run: TRIP_RUN, comments: [RECOVERED_PASS] }).verdict)
+      .toBe('no-clearance');
+    // ...and a contract without one keeps the wording it can honour.
+    expect(assessTrip({ contract: { what: 'x' }, run: TRIP_RUN }).finding).toMatch(/re-run the sentinel to clear/);
+  });
+
+  it('keeps the trip when the trip time cannot be established', () => {
+    const s = assessTripStanding({
+      contract: OCT4,
+      run: { ...TRIP_RUN, run_started_at: undefined, created_at: 'nonsense' },
+      comments: [RECOVERED_PASS],
+    });
+    expect(s.verdict).toBe('standing');
+  });
+
+  it('survives a malformed comment rather than throwing mid-audit', () => {
+    const g = gradeTripClearance(
+      OCT4.cleared,
+      [null, {}, { body: 42 }, { body: RECOVERED_PASS.body, created_at: 'nonsense' }, RECOVERED_PASS],
+      filedAt,
+    );
+    expect(g.verdict).toBe('superseded');
+  });
+
+  it('names the evidence when it retires a trip, so the clear can be checked', () => {
+    const s = assessTripStanding({ contract: OCT4, run: TRIP_RUN, comments: [RECOVERED_PASS] });
+    expect(s.verdict).toBe('superseded');
+    expect(reportAs(s)).toBe('note');
+    expect(s.note).toContain('37183204922'); // which trip
+    expect(s.note).toContain('6073315277'); // which comment contradicted it
+    expect(s.note).toContain('2026-10-09T02:56:39Z');
+    expect(s.note).toContain(OCT4.what); // which claim no longer holds
+    expect(s).not.toHaveProperty('finding');
+  });
+
+  it('leaves the finding in place while the receipt has not landed', () => {
+    const s = assessTripStanding({ contract: OCT4, run: TRIP_RUN, comments: [HEARTBEAT_COMPLAINT] });
+    expect(s.verdict).toBe('standing');
+    // Silent here is what routes main() to the finding below it.
+    expect(reportAs(s)).toBe('silent');
+    expect(reportAs(assessTrip({ contract: OCT4, run: TRIP_RUN }))).toBe('finding');
+  });
+
+  // The obvious guess at what clears a trip is wrong - a satisfied sentinel is
+  // silent, so its re-run leaves nothing behind. The sentence is pinned because
+  // it is the instruction an operator acts on.
+  it('tells the operator what actually clears it, not the obvious guess', () => {
+    const t = assessTrip({ contract: OCT4, run: TRIP_RUN });
+    expect(t.finding).toContain(OCT4.cleared.marker);
+    expect(t.finding).toMatch(/A satisfied sentinel run is silent/);
+    expect(t.finding).toMatch(/cannot clear it/);
+    expect(t.finding).not.toMatch(/re-run the sentinel to clear/);
+  });
+});
+
+// The clearance marker and window are a contract with a SENTINEL, and each half
+// is owned by a different file: the marker by the PowerShell script that scans
+// for it, the window by the query that script makes. A drift in either one
+// leaves the recovery aimed at the right receipt but outside the window, or
+// watching a marker nobody writes - and the trip would simply never retire.
+describe('each clearance is pinned to the sentinel that files the trip', () => {
+  const SCRIPTS: Record<string, string> = {
+    'oct4-sentinel.yml': 'oct4-sentinel.ps1',
+    'oct29-sentinel.yml': 'oct29-sentinel.ps1',
+  };
+
+  it('matches the marker each sentinel scans for and the window it reads', () => {
+    expect(Object.keys(SCRIPTS).sort()).toEqual(Object.keys(TRIPPERS).sort());
+    for (const [workflow, contract] of Object.entries(TRIPPERS)) {
+      const src = readFileSync(join('scripts', SCRIPTS[workflow]), 'utf8');
+      // The sentinel names neither the marker nor the window: it resolves the
+      // chain it witnesses (`$watched`) and reads both off that entry. So the pin
+      // is the derivation, which is what keeps the two ends from drifting - the
+      // old version of this pin asserted the literal the script used to carry.
+      expect(src, `${workflow}: resolves the witness entry`).toContain('$watched = $contract.workflows.($record.witnesses)');
+      expect(src, `${workflow}: clearance marker`).toContain('$_.body -like "*$($watched.marker)*"');
+      expect(src, `${workflow}: clearance window`).toContain('since=$($watched.readsSince)');
+      // The shape comes from the witness entry too. Which one is the sentinel's own
+      // call: oct4 asks whether a PASS landed (satisfiedShape), oct29 reads the
+      // latest verdict token to tell NO_DISPATCH_RUN from a pass (recordShape).
+      expect(
+        ['$watched.satisfiedShape', '$watched.recordShape'].some((ref) => src.includes(ref)),
+        `${workflow}: clearance shape must come from the witness entry`,
+      ).toBe(true);
+      // ...and it is the WITNESS's marker, never the sentinel's own: a sentinel
+      // that waited for its own marker would wait for a comment it never posts.
+      expect(contract.cleared.marker).toBe(contractFor(contractFor(workflow).witnesses as string).marker);
+      expect(contract.cleared.marker).not.toBe(contractFor(workflow).marker);
+    }
+  });
+});
+
+// The vocabulary is shared, and the pin that used to hold it was a RELATIONSHIP
+// between two global regexes - which is exactly the shape that could not see
+// oct28-verify's own records. Now each workflow declares its vocabulary, and this
+// pins the relationship that has to hold inside each entry.
+describe('the record shapes come from the declaration, not a second opinion', () => {
+  const TOKENS = [
+    '**PASS_REFRESHED**', '**PASS_PROMOTED**', '**ATTENTION_PUSH_STEP_FAILED**',
+    '**FAIL_PRE_PROMO**', '**CRON_NOT_FOUND**', '**NO_DISPATCH_RUN**',
+    '**PRE_PROMO_AS_EXPECTED**', '**SENTINEL_RUN_NO_PASS**', '**SENTINEL_OK**',
+  ];
+
+  it('keeps every satisfied shape the PASS-only subset of its own record shape', () => {
+    let seenAPass = false;
+    for (const [workflow, entry] of Object.entries(WORKFLOWS)) {
+      const satisfied = entry.satisfied;
+      if (!satisfied) continue;
+      for (const tok of TOKENS) {
+        const isPass = /^PASS_/.test(tok.replace(/\*/g, ''));
+        expect(satisfied.test(tok), `${workflow} satisfied: ${tok}`).toBe(isPass);
+        if (satisfied.test(tok)) {
+          seenAPass = true;
+          expect(entry.shape.test(tok), `${workflow} record: ${tok}`).toBe(true);
+        }
+      }
+    }
+    expect(seenAPass, 'the PASS token must be exercised').toBe(true);
+  });
+
+  it('sees the records a single global shape declared missing', () => {
+    // oct28-verify posts NO_DISPATCH_RUN and PRE_PROMO_* BY DESIGN, and the one
+    // global verdict shape this repo used to carry listed neither - so the
+    // recovery pass was one step from re-posting over a record already on #18.
+    expect(contractFor('oct28-verify.yml').shape.test('**NO_DISPATCH_RUN**')).toBe(true);
+    expect(contractFor('oct28-verify.yml').shape.test('**PRE_PROMO_AS_EXPECTED**')).toBe(true);
+    // ...and a record is still not a clearance: only a PASS retires a trip.
+    expect(contractFor('oct28-verify.yml').satisfied!.test('**NO_DISPATCH_RUN**')).toBe(false);
+    // One workflow's vocabulary does not leak into another's.
+    expect(contractFor('oct3-verify.yml').shape.test('**NO_DISPATCH_RUN**')).toBe(false);
+    expect(contractFor('oct3-verify.yml').shape.test('**SENTINEL_RUN_NO_PASS**')).toBe(false);
+    expect(contractFor('oct4-sentinel.yml').shape.test('**PASS_REFRESHED**')).toBe(false);
+    // And prose about a record is not a record, whichever workflow it describes.
+    for (const entry of Object.values(WORKFLOWS)) {
+      expect(entry.shape.test('no comment carrying the marker since 2026-10-03')).toBe(false);
+    }
+  });
+});
+
 // assessTrip is pure, so it is fully pinned above - which is exactly why the
 // two mutations below SURVIVED it: nothing asserted that main() actually hands
 // the contract to the helper, or reports what comes back. These are structural
@@ -671,5 +936,26 @@ describe('main() reports a trip instead of dropping it', () => {
     // The `continue` matters as much as the push: without it the receipt check
     // below would also grade the slot and file a second, vaguer finding.
     expect(block![0]).toMatch(/continue;/);
+  });
+
+  // The bug this whole change is about lives in the gap between these two
+  // lines: without the clearance call, a trip whose gap has been repaired is
+  // re-filed every single week, forever. Deleting it must fail the suite.
+  it('consults the durable record before re-filing a trip', () => {
+    const block = src().match(/const trip = assessTrip\([\s\S]*?\n {6}\}/);
+    expect(block, 'the trip assessment must exist in main()').toBeTruthy();
+    expect(block![0]).toMatch(/assessTripStanding\(\{/);
+    // The sentinel's own window, not the whole issue: a verdict from outside it
+    // is not evidence about the morning that sentinel was watching.
+    expect(block![0]).toMatch(/row\.tripper\?\.cleared \? await comments\(row\.tripper\.cleared\.since\)/);
+    expect(block![0]).toMatch(/reportAs\(standing\) === 'note'/);
+    expect(src()).toMatch(/const comments = async \(since\) =>/);
+  });
+
+  // The exemption in gradeTripClearance and the marker the auditor writes must
+  // be the same literal, or the auditor would trust its own prose as a witness.
+  it('writes its own comment marker from the literal it exempts', () => {
+    expect(src()).toContain('const marker = `${SELF_MARKER}${stamp})`');
+    expect(src()).toContain('const body = `${marker}: **${findings.length} finding(s)**');
   });
 });

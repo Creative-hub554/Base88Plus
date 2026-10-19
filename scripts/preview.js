@@ -6,8 +6,8 @@
  * (another thread, another worktree, a stale process) either collides or
  * silently shifts ports. This wrapper probes ports with a REAL bind —
  * the same check the kernel makes, so it is authoritative on every
- * platform, IPv4 and IPv6 — and starts `next dev` on the first free
- * one. Ad-hoc previews never collide.
+ * platform, IPv4 and IPv6 — and hands the first free one to the supervised
+ * dev server (scripts/dev.mjs). Ad-hoc previews never collide.
  *
  * Note: Next 16 dev servers additionally refuse to run twice for the
  * SAME project directory on ANY port ("Another next dev server is
@@ -16,6 +16,12 @@
  * remaining collisions: other worktrees, other directories, and
  * PREVIEW_PORT/`--port` overrides that would otherwise crash into
  * an unrelated listener.
+ *
+ * The server itself is the SUPERVISED one (scripts/dev.mjs), not bare
+ * `next dev`: a preview is exactly the long-lived server whose Turbopack
+ * transform pool can die quietly, leaving the already-built routes working and
+ * every uncompiled one 500ing. The supervisor restarts it in place, so a
+ * preview tab heals instead of turning into a minefield of 500s.
  *
  * Usage:
  *   node scripts/preview.js            first free port from 3000 up
@@ -75,11 +81,11 @@ async function main() {
     throw new Error(`bad starting port: ${first}`);
   }
 
-  const nextBin = require.resolve('next/dist/bin/next');
+  const supervisor = require.resolve('./dev.mjs');
   const port = await pickPort(first);
 
-  console.log(`[preview] port ${port} is free — starting next dev`);
-  const child = spawn(process.execPath, [nextBin, 'dev', '-p', String(port)], {
+  console.log(`[preview] port ${port} is free — starting supervised next dev`);
+  const child = spawn(process.execPath, [supervisor, '-p', String(port)], {
     stdio: 'inherit',
     env: process.env,
   });

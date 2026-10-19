@@ -1,0 +1,12 @@
+TRANSPORT fixture=transport-rehearsal.json cases=10
+TRANSPORT OK   issue-get: both transports delivered 1 item(s)
+TRANSPORT OK   comments-window-many: both transports delivered 2 item(s)
+TRANSPORT OK   comments-window-one: both transports delivered 1 item(s)
+TRANSPORT OK   comments-window-none: both transports delivered 0 item(s)
+TRANSPORT OK   workflow-runs: both transports delivered 1 item(s)
+TRANSPORT OK   post-refused: both transports delivered the same refusal
+TRANSPORT OK   post-accepted: both transports delivered 1 item(s)
+TRANSPORT OK   unrouted: both transports delivered the same refusal
+TRANSPORT OK   artifact-zip: the world's log out of a 224-byte zip (run.log, 112 character(s)), and powershell refusing the bytes it cannot carry
+TRANSPORT OK   raw-file: both transports delivered the same file (status 200)
+TRANSPORT_DONE cases=10 failed=0

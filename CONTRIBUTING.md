@@ -9,11 +9,12 @@ for you).
 
 ```bash
 npm install        # Node ≥22 <27 enforced; .nvmrc pins 24
-npm run dev        # http://localhost:3000
+npm run dev        # http://localhost:3000, supervised (README → Scripts)
 npm test           # the full Vitest suite
 npm run typecheck  # tsc --noEmit
 npm run lint       # eslint
 npm run check:node # verify .nvmrc + engines + CI matrix agree
+npm run check:legs # the gate CI blocks a merge on, on every blocking Node leg
 ```
 
 Add a provider key in **Settings → AI Providers** (stored locally in
@@ -31,6 +32,13 @@ Add a provider key in **Settings → AI Providers** (stored locally in
    order (cheapest first):
    ```bash
    npm run check:node && npm run typecheck && npm run lint && npm test
+   ```
+   That last run is on **your** Node, which may be the canary — the leg CI
+   deliberately lets fail. If your change could behave differently on an older
+   one (or you just want the answer before CI gives it to you):
+   ```bash
+   npm run check:legs            # every blocking leg, the full sequence on each
+   npm run check:legs -- --only test --legs 22   # one step, one leg, one minute
    ```
 4. Push and open a PR against `main`. Fill in the description: what changed,
    why, and anything you deliberately did *not* do.
@@ -54,11 +62,21 @@ official Node.js release schedule, not hardcoded.
 - **`ci-ok`** — the single stable check that requires the branch protection
   ruleset. Never wire anything to per-leg names (`gates (22)`, …): they
   change on promotion day, by design.
+- **Other blockers with a verdict** — `ci-ok` also waits on the `perf-gate`
+  (superlinearity), the `soak` (a real build reloaded 12 times, checking that
+  every retired run left nothing behind and that no client at a swap lost its
+  answer — and then reading the trend line that run wrote, so reloads that get
+  slower as the soak goes on fail too: that is a leak's first symptom, and the
+  one a single run's leak verdict cannot see), the `rehearsals` and
+  `rehearsal-parity` (the PowerShell tools that decide a verdict, on two engine
+  lines). Each runs in parallel with the gates
+  and each fails the merge it is red on: they are checks, not advisories.
 
 Practical consequences:
 
 - If CI fails on one Node leg only, look for version-specific behavior
   (API differences between 22/24, engine-specific deprecations).
+  `npm run check:legs` reproduces exactly that locally, leg by leg.
 - `npm run check:node` fails locally when your change (or the schedule)
   breaks the contract that `.nvmrc`, `engines`, and the CI matrix agree —
   fix it locally rather than waiting for CI to tell you.

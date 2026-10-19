@@ -53,16 +53,23 @@ public class CredManOct28 {
 }
 if (-not $env:VERIFY_TOKEN) { Write-Output 'NO_TOKEN'; exit 1 }
 $h = @{ Authorization = "Bearer $($env:VERIFY_TOKEN)"; Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' }
-$base = 'https://api.github.com/repos/Creative-hub554/Base88Plus'
+# --- 0. the contract (scripts/verdict-contract.json): marker, window, day and
+# shapes are read, never restated (see scripts/verdict-contract.ps1).
+. (Join-Path $PSScriptRoot 'verdict-contract.ps1')
+$contract = Get-VerdictContract
+$watched = $contract.workflows.'oct28-verify.yml'
+$base = "https://api.github.com/repos/$($contract.repo)"
+$issue = $contract.issue
 $today = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
+$windowEnd = ([datetime]$watched.recordsOn).AddDays(1).ToString('yyyy-MM-dd')
 
 # 1. Scheduled oct28-verify runs on promotion day (smoke dispatches never post - excluded)
 try {
-  $runs = Invoke-RestMethod -Uri "$base/actions/workflows/oct28-verify.yml/runs?event=schedule&created=2026-10-28..2026-10-29&per_page=20" -Headers $h
+  $runs = Invoke-RestMethod -Uri "$base/actions/workflows/$($watched.workflow)/runs?event=schedule&created=$($watched.recordsOn)..$windowEnd&per_page=20" -Headers $h
 } catch {
   $code = $_.Exception.Response.StatusCode.value__
   if ($code -eq 404) {
-    Write-Output 'OCT28_CHECK ATTENTION: oct28-verify.yml has no runs endpoint (404) - the workflow is not on the default branch yet (merge pending?) or was renamed/deleted.'
+    Write-Output "OCT28_CHECK ATTENTION: $($watched.workflow) has no runs endpoint (404) - the workflow is not on the default branch yet (merge pending?) or was renamed/deleted."
     exit 1
   }
   Write-Output "OCT28_CHECK ATTENTION: workflow-runs query failed (HTTP $code): $($_.Exception.Message)"
@@ -82,8 +89,8 @@ if ($inProgress.Count -gt 0) {
 }
 
 # 2. The verdict from #18 (the verifier's durable record, idempotent per run id)
-$comments = Invoke-RestMethod -Uri "$base/issues/18/comments?since=2026-10-28T00:00:00Z&per_page=50" -Headers $h
-$verdictComments = @($comments) | Where-Object { $_.body -like '*post-Oct-28 verifier*' }
+$comments = Invoke-RestMethod -Uri "$base/issues/$issue/comments?since=$($watched.readsSince)&per_page=50" -Headers $h
+$verdictComments = @($comments) | Where-Object { $_.body -like "*$($watched.marker)*" }
 Write-Output "scheduled attempts on promotion day: $($day.Count) (all completed)"
 $day | ForEach-Object { Write-Output ("  run " + $_.id + " -> " + $_.conclusion + " - " + $_.html_url) }
 Write-Output "#18 verifier comments since Oct 28: $($verdictComments.Count)"
@@ -95,9 +102,10 @@ if ($verdictComments.Count -eq 0) {
 
 $latest = $verdictComments | Sort-Object created_at -Descending | Select-Object -First 1
 $verdict = $null
-if ($latest.body -match '\*\*(PASS_[A-Z_]+)\*\*') { $verdict = $Matches[1] }
-elseif ($latest.body -match '\*\*(NO_DISPATCH_RUN)\*\*') { $verdict = $Matches[1] }
-elseif ($latest.body -match '\*\*((FAIL|PRE_PROMO)_[A-Z_]+)\*\*') { $verdict = $Matches[1] }
+# One shape, from the verifier's declared vocabulary - which is why
+# NO_DISPATCH_RUN is not a special case spelled out separately here: it is part of
+# what this workflow posts, so the declaration says so and this reads it.
+if ($latest.body -match $watched.recordShape) { $verdict = $Matches[1] }
 Write-Output "── latest verdict comment ($($latest.created_at), $($latest.user.login)):"
 $latest.body -split "`n" | Where-Object { $_ -match 'verifier|Dispatch run|Check-runs|Snapshot on main|Push status|@types|Next:|\*\*' } | ForEach-Object { Write-Output ("  " + $_.Trim()) }
 
@@ -110,7 +118,7 @@ if ($verdict -eq 'NO_DISPATCH_RUN') {
   Write-Output '  curl -s -o /dev/null -w "%{http_code}\n" -X POST \'
   Write-Output '    -H "Authorization: Bearer <TOKEN>" -H "Accept: application/vnd.github+json" \'
   Write-Output '    -d ''{"ref":"refs/heads/main"}'' \'
-  Write-Output '    https://api.github.com/repos/Creative-hub554/Base88Plus/actions/workflows/ci.yml/dispatches   # expect 204'
+  Write-Output "    https://api.github.com/repos/$($contract.repo)/actions/workflows/ci.yml/dispatches   # expect 204"
   exit 1
 }
 if (-not $verdict) { $verdict = 'UNPARSEABLE' }

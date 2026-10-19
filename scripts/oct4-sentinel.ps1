@@ -67,36 +67,52 @@ public class CredManOct4 {
 }
 if (-not $env:VERIFY_TOKEN) { Write-Output 'NO_TOKEN'; exit 1 }
 $h = @{ Authorization = "Bearer $($env:VERIFY_TOKEN)"; Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' }
-$base = 'https://api.github.com/repos/Creative-hub554/Base88Plus'
+# --- 0. the contract (scripts/verdict-contract.json) ---
+# The chain this sentinel witnesses, the marker and window it reads out of that
+# chain's records, and the marker and day of its OWN record are all declared once
+# and derived here - the recovery pass and the heartbeat auditor read the same
+# declaration, so the three cannot disagree about what a record is.
+. (Join-Path $PSScriptRoot 'verdict-contract.ps1')
+$contract = Get-VerdictContract
+$record = Get-VerdictRecord -Contract $contract -ScriptPath $PSCommandPath
+$watched = $contract.workflows.($record.witnesses)
+$base = "https://api.github.com/repos/$($contract.repo)"
+$issue = $contract.issue
+$windowStart = $watched.recordsOn
+$windowEnd = $record.recordsOn
 
 # --- 1. date gate: the sentinel only means anything on/after Oct 4 ---
 $today = if ($env:VERIFY_GNOMON) { $env:VERIFY_GNOMON } else { (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd') }
-# The date-gate overrides (VERIFY_FORCE / VERIFY_GNOMON) exist for plumbing
-# rehearsals - a faked date can produce a verdict that is FALSE on the real
-# calendar, so posting must stay impossible whenever either is set.
-# Rehearsed the hard way 2026-09-30: a gnomon rehearsal without DRY_RUN
-# posted a false SENTINEL_NO_SCHEDULED_RUN dated 2026-10-04 onto #18 (the
-# comment was deleted and this guard added).
+# A faked calendar must not be able to file a record on GitHub; the transport, not
+# the date, decides whether it can (see Test-VerdictSimulatedTransport). Rehearsed
+# the hard way 2026-09-30: a gnomon rehearsal without DRY_RUN posted a false
+# SENTINEL_NO_SCHEDULED_RUN dated 2026-10-04 onto #18 - and that rehearsal had no
+# simulated transport, which is exactly the case the guard still forces dry.
 if ($env:VERIFY_FORCE -eq '1' -or $env:VERIFY_GNOMON) {
-  $env:DRY_RUN = '1'
-  Write-Output 'FORCED_DRY_RUN (VERIFY_FORCE/VERIFY_GNOMON set - rehearsals never post)'
+  if (Test-VerdictSimulatedTransport) {
+    Write-Output 'SIMULATED_WORLD (faked date + rehearsal transport - a record filed here lands in the simulated world, never on GitHub)'
+  } else {
+    $env:DRY_RUN = '1'
+    Write-Output 'FORCED_DRY_RUN (VERIFY_FORCE/VERIFY_GNOMON set - rehearsals never post)'
+  }
 }
-if ($today -lt '2026-10-04' -and $env:VERIFY_FORCE -ne '1') {
-  Write-Output "REFUSED_DATE_GATE today=$today sentinel fires 2026-10-04T01:00Z (VERIFY_FORCE=1 or VERIFY_GNOMON overrides for plumbing tests)"; exit 2
+if ($today -lt $record.recordsOn -and $env:VERIFY_FORCE -ne '1') {
+  Write-Output "REFUSED_DATE_GATE today=$today sentinel fires $($record.recordsOn)T01:00Z (VERIFY_FORCE=1 or VERIFY_GNOMON overrides for plumbing tests)"; exit 2
 }
 
 # --- 2. question 1: did a scheduled oct3-verify attempt fire in the window? ---
-# Same window convention as the verifier itself (created=2026-10-03..2026-10-04
-# is inclusive of both endpoints at day granularity).
-$runs = Invoke-RestMethod -Uri "$base/actions/workflows/oct3-verify.yml/runs?event=schedule&created=2026-10-03..2026-10-04&per_page=20" -Headers $h
+# Same window convention as the verifier itself (created=<start>..<end> is
+# inclusive of both endpoints at day granularity); both ends come from the
+# declaration, not from a second copy of the dates here.
+$runs = Invoke-RestMethod -Uri "$base/actions/workflows/$($record.witnesses)/runs?event=schedule&created=$windowStart..$windowEnd&per_page=20" -Headers $h
 $day = @($runs.workflow_runs)
-Write-Output "scheduled oct3-verify attempts in 2026-10-03..2026-10-04: $($day.Count)"
+Write-Output "scheduled $($record.witnesses) attempts in $windowStart..${windowEnd}: $($day.Count)"
 $day | ForEach-Object { Write-Output ("  run " + $_.id + " " + $_.status + "/" + $_.conclusion + " started " + $_.created_at + " - " + $_.html_url) }
 
 if ($day.Count -eq 0) {
   $verdict = 'SENTINEL_NO_SCHEDULED_RUN'
-  $comment = "post-Oct-3 sentinel (checked $today): **SENTINEL_NO_SCHEDULED_RUN**`n`nThe Oct 4 sentinel found NO scheduled (event=schedule) oct3-verify run in the 2026-10-03..2026-10-04 window - none of the three Oct 3 crons (07:47/09:07/19:17 UTC) ever fired. GitHub skips scheduled workflows silently (60-day repo inactivity auto-disable, schedule disabled manually, or runner-queue stall), so there is no red run to alert on; this comment is that alert.`n`nNext: open Actions > Oct 3 verifier and check the workflow state (re-enable if 'disabled_manually'/'disabled_inactivity'), confirm the repo was not idle >60 days, then run the verification manually (ci.yml dispatch with force_snapshot_refresh, or an oct3-verify workflow_dispatch is smoke-only - it does NOT post) and post the verdict on #18. Then re-run the sentinel to clear."
-  Write-Output "VERDICT=$verdict"
+  $comment = "$(Format-VerdictHeader -Record $record -Day $today): **SENTINEL_NO_SCHEDULED_RUN**`n`nThe Oct 4 sentinel found NO scheduled (event=schedule) oct3-verify run in the $windowStart..$windowEnd window - none of the three Oct 3 crons (07:47/09:07/19:17 UTC) ever fired. GitHub skips scheduled workflows silently (60-day repo inactivity auto-disable, schedule disabled manually, or runner-queue stall), so there is no red run to alert on; this comment is that alert.`n`nNext: open Actions > Oct 3 verifier and check the workflow state (re-enable if 'disabled_manually'/'disabled_inactivity'), confirm the repo was not idle >60 days, then run the verification manually (ci.yml dispatch with force_snapshot_refresh, or an oct3-verify workflow_dispatch is smoke-only - it does NOT post) and post the verdict on #18. Then re-run the sentinel to clear."
+  Write-Output "$($contract.logSyntax.verdict)$verdict"
 } else {
   $inProgress = @($day | Where-Object { $_.status -ne 'completed' })
   if ($inProgress.Count -gt 0) {
@@ -107,9 +123,18 @@ if ($day.Count -eq 0) {
     exit 0
   }
   # --- 3. question 2: did a completed run post a PASS_* verdict on #18? ---
-  $comments = Invoke-RestMethod -Uri "$base/issues/18/comments?since=2026-10-03T00:00:00Z&per_page=100" -Headers $h
-  $verdictComments = @($comments) | Where-Object { $_.body -like '*post-Oct-3 verifier*' }
-  $pass = @($verdictComments) | Where-Object { $_.body -match '\*\*PASS_[A-Z_]+\*\*' }
+  $comments = Invoke-RestMethod -Uri "$base/issues/$issue/comments?since=$($watched.readsSince)&per_page=100" -Headers $h
+  # @(...) wraps the RESULT, not the input. PowerShell hands an intrinsic
+  # .Count to arrays and hashtables but NOT to a single PSCustomObject, so a
+  # one-element pipeline result reads .Count as EMPTY and every -gt 0 test on
+  # it is silently false. One verdict is the normal case, so this sentinel
+  # reported SENTINEL_RUN_NO_PASS over a perfectly good PASS. The wrap must
+  # sit after the filter: @($null) is a one-element array, so wrapping the
+  # raw API response would turn "no comments" into a count of 1.
+  # The marker read out of the chain's own records, and the shape of a record
+  # that ends the morning well - both the witnessed workflow's declared values.
+  $verdictComments = @(@($comments) | Where-Object { $_.body -like "*$($watched.marker)*" })
+  $pass = @($verdictComments | Where-Object { $_.body -match $watched.satisfiedShape })
   Write-Output "#18 verifier comments since Oct 3: $($verdictComments.Count) (PASS: $($pass.Count))"
   if ($pass.Count -gt 0) {
     $latest = $pass | Sort-Object created_at -Descending | Select-Object -First 1
@@ -118,21 +143,29 @@ if ($day.Count -eq 0) {
   }
   $latestConclusion = ($day | Sort-Object created_at -Descending | Select-Object -First 1).conclusion
   $verdict = 'SENTINEL_RUN_NO_PASS'
-  $comment = "post-Oct-3 sentinel (checked $today): **SENTINEL_RUN_NO_PASS**`n`nThe Oct 4 sentinel found $($day.Count) completed scheduled oct3-verify attempt(s) in the 2026-10-03..2026-10-04 window (latest conclusion: $latestConclusion), but NO comment on #18 carries a PASS verdict marker (bold PASS_...; verifier comments found: $($verdictComments.Count)). The chain fired but did not land a pass - either every attempt failed before recording, or the recorded verdict was ATTENTION_*/FAIL_*/CRON_NOT_FOUND.`n`nNext: pull the oct3-verify-log artifacts from the runs above and the verifier comments on #18 for the specific verdict, follow its Next: block, fix, and re-verify. Then re-run the sentinel to clear."
-  Write-Output "VERDICT=$verdict"
+  $comment = "$(Format-VerdictHeader -Record $record -Day $today): **SENTINEL_RUN_NO_PASS**`n`nThe Oct 4 sentinel found $($day.Count) completed scheduled oct3-verify attempt(s) in the $windowStart..$windowEnd window (latest conclusion: $latestConclusion), but NO comment on #18 carries a PASS verdict marker (bold PASS_...; verifier comments found: $($verdictComments.Count)). The chain fired but did not land a pass - either every attempt failed before recording, or the recorded verdict was ATTENTION_*/FAIL_*/CRON_NOT_FOUND.`n`nNext: pull the oct3-verify-log artifacts from the runs above and the verifier comments on #18 for the specific verdict, follow its Next: block, fix, and re-verify. Then re-run the sentinel to clear."
+  Write-Output "$($contract.logSyntax.verdict)$verdict"
 }
 
 # --- 4. record the gap on #18 (idempotent by sentinel-day marker) ---
-$prior = Invoke-RestMethod -Uri "$base/issues/18/comments?since=2026-10-04T00:00:00Z&per_page=50" -Headers $h
-$marker = "sentinel (checked $today)"
-if (@($prior) | Where-Object { $_.body -like "*$marker*" }) { Write-Output "ALREADY_RECORDED ($marker)"; exit 1 }
+# Print the composed body ALWAYS, not only on the dry path. The uploaded
+# oct4-sentinel-log artifact is the recovery source for
+# scripts/recover-verdicts.mjs, and a log carrying the exact comment cannot be
+# mis-transcribed the way a hand recovery can.
+Write-Output $contract.logSyntax.body
+Write-Output $comment
+# The identity of this record, rendered from the contract: what is written and
+# what is searched for are the same string, by construction.
+$header = Format-VerdictHeader -Record $record -Day $today
+$prior = Invoke-RestMethod -Uri "$base/issues/$issue/comments?since=$($record.recordsOn)T00:00:00Z&per_page=50" -Headers $h
+if (@($prior) | Where-Object { $_.body -like "*$header*" }) { Write-Output "ALREADY_RECORDED ($header)"; exit 1 }
 if ($env:DRY_RUN -eq '1') { Write-Output '--- DRY RUN: comment body below (not posted) ---'; Write-Output $comment; exit 1 }
 $cb = @{ body = $comment } | ConvertTo-Json
 try {
-  $r = Invoke-RestMethod -Uri "$base/issues/18/comments" -Method Post -Headers $h -ContentType 'application/json' -Body $cb
+  $r = Invoke-RestMethod -Uri "$base/issues/$issue/comments" -Method Post -Headers $h -ContentType 'application/json' -Body $cb
   Write-Output (("COMMENT_POSTED id=") + $r.id)
 } catch {
-  Write-Output (("COMMENT_FAILED ") + $_.Exception.Message)
+  Write-Output (($contract.logSyntax.commentFailed) + $_.Exception.Message)
   if ($_.ErrorDetails) { Write-Output $_.ErrorDetails.Message }
   if ($comment -match '[^\x00-\x7F]') { Write-Output 'HINT non-ASCII characters detected in body' }
 }
